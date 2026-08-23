@@ -1,1 +1,6 @@
-.opencode/
+__pycache__/
+*.pyc
+*.log
+.venv/
+*.db
+.env
