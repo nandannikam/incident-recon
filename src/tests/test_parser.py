@@ -1,6 +1,4 @@
-import pandas as pd
 from src.app.parser import parse_log
-import os
 
 def test_parse_log(tmp_path):
     csv_content = """timestamp,source,event_type,actor,target,metadata
@@ -17,3 +15,4 @@ BAD_ROW_NO_TIMESTAMP,HOST01,file_creation,USER01,file.txt,"{}"
     assert events[0].event_type == "process_execution"
     assert events[1].event_type == "file_creation"
     assert events[0].event_id == f"{test_file}:0"
+    assert events[0].metadata.get("pid") == 123
