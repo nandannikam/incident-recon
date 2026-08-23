@@ -12,23 +12,23 @@ class EventType(str, Enum):
     LOG_DELETION = "log_deletion"
 
 class Event(BaseModel):
-    event_id: str            # "{source}:{row}" — assigned at parse time
+    event_id: str            
     timestamp: datetime
-    source: str              # log source / hostname
+    source: str              
     event_type: EventType
-    actor: str               # user / process that acted
-    target: str              # object acted upon (file, reg key, dest IP...)
-    metadata: dict           # everything else (commandline, parentpid, etc.)
+    actor: str               
+    target: str              
+    metadata: dict           
 
 class Evidence(BaseModel):
     event_ids: list[str]
     explanation: str
-    parent_conclusion_id: str | None = None   # for derived/chained facts
+    parent_conclusion_id: str | None = None   
 
 class Conclusion(BaseModel):
     rule_id: str
-    technique_id: str        # MITRE ATT&CK technique, e.g. "T1547.001"
-    tactic: str              # e.g. "Persistence"
+    technique_id: str        
+    tactic: str              
     description: str
     evidence: list[Evidence]
 

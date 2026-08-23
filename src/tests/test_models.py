@@ -2,7 +2,6 @@ from datetime import datetime
 from src.app.models import Event, EventType
 
 def test_event_creation():
-    # The document requires a test that constructs an Event from a dict and validates it
     event_data = {
         "event_id": "attack_sample.csv:1",
         "timestamp": datetime.now(),
@@ -13,8 +12,8 @@ def test_event_creation():
         "metadata": {"pid": 1234}
     }
     
-    # This will successfully build if the Pydantic model is correct[cite: 1]
     event = Event(**event_data)
     
     assert event.event_id == "attack_sample.csv:1"
     assert event.event_type == "process_execution"
+    assert event.metadata["pid"] == 1234
