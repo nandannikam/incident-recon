@@ -1,5 +1,5 @@
 import pandas as pd
-from src.parser import parse_log
+from src.app.parser import parse_log
 import os
 
 def test_parse_log(tmp_path):

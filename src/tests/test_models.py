@@ -1,5 +1,5 @@
 from datetime import datetime
-from src.models import Event, EventType
+from src.app.models import Event, EventType
 
 def test_event_creation():
     # The document requires a test that constructs an Event from a dict and validates it

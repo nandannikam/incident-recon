@@ -1,5 +1,5 @@
 import pandas as pd
-from src.models import Event, EventType
+from src.app.models import Event, EventType
 from datetime import datetime
 import logging
 
