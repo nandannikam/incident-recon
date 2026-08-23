@@ -1,8 +1,0 @@
-timestamp,source,event_type,actor,target,metadata
-2024-01-01T10:00:00Z,HOST01,file_download,SYSTEM,C:\temp\invoice.zip,"{'url':'http://malicious.example/invoice.zip'}"
-2024-01-01T10:00:30Z,HOST01,file_creation,SYSTEM,C:\temp\invoice.exe,"{'parent':'zip_extract'}"
-2024-01-01T10:01:00Z,HOST01,process_execution,USER01,invoice.exe,"{'parentpid':1024,'pid':2048}"
-2024-01-01T10:01:30Z,HOST01,powershell_execution,USER01,powershell.exe,"{'scriptblock':'Set-MpPreference -DisableRealtimeMonitoring $true'}"
-2024-01-01T10:02:00Z,HOST01,registry_modification,USER01,HKLM:\Software\Microsoft\Windows\CurrentVersion\Run\Updater,"{'value':'C:\\temp\\invoice.exe'}"
-2024-01-01T10:02:30Z,HOST01,network_connection,invoice.exe,185.220.101.1,"{'port':443}"
-2024-01-01T10:03:00Z,HOST01,log_deletion,USER01,Security.evtx,"{'method':'wevtutil cl'}"
