@@ -1,0 +1,4 @@
+timestamp,source,event_type,actor,target,metadata
+2024-01-01T11:00:00Z,HOST01,process_execution,USER02,chrome.exe,"{'parentpid':500,'pid':999}"
+2024-01-01T11:05:00Z,HOST01,network_connection,chrome.exe,8.8.8.8,"{'port':443}"
+2024-01-01T11:15:00Z,HOST01,file_creation,USER02,C:\Users\USER02\Documents\report.docx,"{'parent':'winword.exe'}"
