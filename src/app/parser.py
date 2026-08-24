@@ -30,7 +30,8 @@ import ast
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
+from typing import Any, cast
 
 import pandas as pd
 
@@ -51,7 +52,7 @@ class ParseResult:
     errors: list[str] = field(default_factory=list)
 
 
-def _is_missing(value) -> bool:
+def _is_missing(value: Any) -> bool:
     if value is None:
         return True
     try:
@@ -59,12 +60,10 @@ def _is_missing(value) -> bool:
             return True
     except (TypeError, ValueError):
         pass
-    if isinstance(value, str) and value.strip() == "":
-        return True
-    return False
+    return isinstance(value, str) and value.strip() == ""
 
 
-def _clean_required_field(value) -> str | None:
+def _clean_required_field(value: Any) -> str | None:
     """Return a stripped string, or None if the value is missing/NaN.
     Never produces the literal string 'nan' for an absent field."""
     if _is_missing(value):
@@ -72,7 +71,7 @@ def _clean_required_field(value) -> str | None:
     return str(value).strip()
 
 
-def _parse_metadata(raw) -> tuple[dict, bool]:
+def _parse_metadata(raw: Any) -> tuple[dict, bool]:
     """Returns (metadata_dict, ok). ok=False means the field was present but
     unparseable, which the caller must treat as a malformed row."""
     if isinstance(raw, dict):
@@ -101,7 +100,7 @@ def _parse_metadata(raw) -> tuple[dict, bool]:
         return {}, False
 
 
-def _normalize_timestamp(raw) -> datetime:
+def _normalize_timestamp(raw: Any) -> datetime:
     """Parse to a real datetime and normalize to UTC. Raises on failure so
     the caller can count the row as malformed."""
     if isinstance(raw, datetime):
@@ -113,8 +112,8 @@ def _normalize_timestamp(raw) -> datetime:
         dt = datetime.fromisoformat(text)
 
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=datetime.UTC)
+    return dt.astimezone(datetime.UTC)
 
 
 def parse_log(file_path: str) -> ParseResult:
@@ -159,10 +158,10 @@ def parse_log(file_path: str) -> ParseResult:
                 Event(
                     event_id=f"{file_path}:{original_index}",
                     timestamp=timestamp,
-                    source=values["source"],
-                    event_type=EventType(values["event_type"]),
-                    actor=values["actor"],
-                    target=values["target"],
+                    source=cast(str, values["source"]),
+                    event_type=EventType(cast(str, values["event_type"])),
+                    actor=cast(str, values["actor"]),
+                    target=cast(str, values["target"]),
                     metadata=metadata,
                 )
             )

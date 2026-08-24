@@ -1,14 +1,15 @@
-from datetime import datetime, timezone
+import pytest
+from pydantic import ValidationError
 
 from app.models import (
     DEMO_RULES,
+    TIME_WINDOW_MINUTES,
     Conclusion,
     EdgeType,
     Event,
     EventType,
     Evidence,
     Incident,
-    TIME_WINDOW_MINUTES,
 )
 
 
@@ -39,11 +40,8 @@ def test_event_type_rejects_unknown_value():
         "actor": "USER01",
         "target": "x",
     }
-    try:
+    with pytest.raises(ValidationError):
         Event.model_validate(raw)
-        assert False, "expected a validation error for an unknown event_type"
-    except Exception:
-        pass
 
 
 def test_incident_round_trip_with_derived_conclusion():
