@@ -1,9 +1,11 @@
+from pathlib import Path
+
 import pytest
 
 from app.parser import parse_log
 
 
-def test_valid_rows_and_bad_row_are_skipped_and_counted(tmp_path):
+def test_valid_rows_and_bad_row_are_skipped_and_counted(tmp_path: Path) -> None:
     csv_path = tmp_path / "mixed.csv"
     csv_path.write_text(
         "timestamp,source,event_type,actor,target,metadata\n"
@@ -20,16 +22,18 @@ def test_valid_rows_and_bad_row_are_skipped_and_counted(tmp_path):
     assert len(result.errors) == 1
 
 
-def test_event_id_uses_original_row_number_even_when_input_is_unsorted(tmp_path):
+def test_event_id_uses_original_row_number_even_when_input_is_unsorted(
+    tmp_path: Path,
+) -> None:
     """Issue #17 regression test: the file is deliberately OUT of
     chronological order. event_id must map to the physical source row,
     while the returned events list must still be sorted by time."""
     csv_path = tmp_path / "unsorted.csv"
     csv_path.write_text(
         "timestamp,source,event_type,actor,target,metadata\n"
-        '2024-01-01T10:05:00Z,HOST01,process_execution,USER01,late.exe,{}\n'   # row 0, latest time
-        '2024-01-01T10:00:00Z,HOST01,process_execution,USER01,early.exe,{}\n'  # row 1, earliest time
-        '2024-01-01T10:02:00Z,HOST01,process_execution,USER01,mid.exe,{}\n'    # row 2, middle time
+        "2024-01-01T10:05:00Z,HOST01,process_execution,USER01,late.exe,{}\n"  # row 0, latest time
+        "2024-01-01T10:00:00Z,HOST01,process_execution,USER01,early.exe,{}\n"  # row 1, earliest time
+        "2024-01-01T10:02:00Z,HOST01,process_execution,USER01,mid.exe,{}\n"  # row 2, middle time
     )
 
     result = parse_log(str(csv_path))
@@ -46,16 +50,18 @@ def test_event_id_uses_original_row_number_even_when_input_is_unsorted(tmp_path)
     assert by_target["mid.exe"] == f"{csv_path}:2"
 
 
-def test_mixed_timezone_formats_are_normalized_and_sorted_correctly(tmp_path):
+def test_mixed_timezone_formats_are_normalized_and_sorted_correctly(
+    tmp_path: Path,
+) -> None:
     """Issue #18 regression test: a Z-suffixed value, an explicit offset,
     and a naive value must not crash and must sort correctly once
     normalized to UTC."""
     csv_path = tmp_path / "tz.csv"
     csv_path.write_text(
         "timestamp,source,event_type,actor,target,metadata\n"
-        '2024-01-01T12:00:00Z,HOST01,process_execution,USER01,utc.exe,{}\n'
-        '2024-01-01T13:30:00+05:30,HOST01,process_execution,USER01,offset.exe,{}\n'  # == 08:00 UTC
-        '2024-01-01T09:00:00,HOST01,process_execution,USER01,naive.exe,{}\n'          # treated as UTC
+        "2024-01-01T12:00:00Z,HOST01,process_execution,USER01,utc.exe,{}\n"
+        "2024-01-01T13:30:00+05:30,HOST01,process_execution,USER01,offset.exe,{}\n"  # == 08:00 UTC
+        "2024-01-01T09:00:00,HOST01,process_execution,USER01,naive.exe,{}\n"  # treated as UTC
     )
 
     result = parse_log(str(csv_path))
@@ -67,7 +73,9 @@ def test_mixed_timezone_formats_are_normalized_and_sorted_correctly(tmp_path):
     assert [e.target for e in result.events] == ["offset.exe", "naive.exe", "utc.exe"]
 
 
-def test_row_with_missing_actor_is_skipped_not_coerced_to_nan_string(tmp_path):
+def test_row_with_missing_actor_is_skipped_not_coerced_to_nan_string(
+    tmp_path: Path,
+) -> None:
     """Issue #20 regression test."""
     csv_path = tmp_path / "missing_actor.csv"
     csv_path.write_text(
@@ -80,12 +88,14 @@ def test_row_with_missing_actor_is_skipped_not_coerced_to_nan_string(tmp_path):
     assert result.events == []
 
 
-def test_unparseable_metadata_skips_the_row_instead_of_blanking_it(tmp_path):
+def test_unparseable_metadata_skips_the_row_instead_of_blanking_it(
+    tmp_path: Path,
+) -> None:
     """Issue #19 regression test."""
     csv_path = tmp_path / "bad_meta.csv"
     csv_path.write_text(
         "timestamp,source,event_type,actor,target,metadata\n"
-        '2024-01-01T10:00:00Z,HOST01,process_execution,USER01,a.exe,{not valid at all\n'
+        "2024-01-01T10:00:00Z,HOST01,process_execution,USER01,a.exe,{not valid at all\n"
     )
 
     result = parse_log(str(csv_path))
@@ -93,13 +103,13 @@ def test_unparseable_metadata_skips_the_row_instead_of_blanking_it(tmp_path):
     assert result.events == []
 
 
-def test_json_metadata_with_lowercase_null_and_bool_parses(tmp_path):
+def test_json_metadata_with_lowercase_null_and_bool_parses(tmp_path: Path) -> None:
     """Issue #21 regression test: real-world/Mordor-style JSON booleans and
     null must parse, which ast.literal_eval alone cannot do."""
     csv_path = tmp_path / "json_meta.csv"
     csv_path.write_text(
         "timestamp,source,event_type,actor,target,metadata\n"
-        '2024-01-01T10:00:00Z,HOST01,process_execution,USER01,a.exe,'
+        "2024-01-01T10:00:00Z,HOST01,process_execution,USER01,a.exe,"
         '"{""elevated"": true, ""parent_deleted"": false, ""notes"": null}"\n'
     )
 
@@ -111,15 +121,20 @@ def test_json_metadata_with_lowercase_null_and_bool_parses(tmp_path):
     assert meta["notes"] is None
 
 
-def test_nonexistent_file_raises_instead_of_returning_empty_result():
+def test_nonexistent_file_raises_instead_of_returning_empty_result() -> None:
     """Issue #15 regression test."""
     with pytest.raises(FileNotFoundError):
         parse_log("/tmp/this_file_definitely_does_not_exist_12345.csv")
 
 
-def test_empty_file_raises():
+def test_empty_file_raises(tmp_path: Path) -> None:
     """Issue #15 regression test — an unreadable/empty file is a distinct
     failure mode from 'zero valid rows in a well-formed file'."""
     import pandas as pd
+
+    # Create a real, empty file that works on Windows, Linux, and Mac
+    empty_file = tmp_path / "empty.csv"
+    empty_file.touch()
+
     with pytest.raises(pd.errors.EmptyDataError):
-        parse_log("/dev/null")
+        parse_log(str(empty_file))

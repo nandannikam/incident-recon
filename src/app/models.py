@@ -54,9 +54,14 @@ class EdgeType(str, Enum):
     materializing an edge between every event sharing a user or host.
     """
 
-    FOLLOWED_BY = "followed_by"   # temporal adjacency within TIME_WINDOW_MINUTES
-    SPAWNED = "spawned"           # parent/child process relationship
-    SAME_OBJECT = "same_object"   # shared file / registry key / IP target
+    FOLLOWED_BY = "followed_by"  # temporal adjacency within TIME_WINDOW_MINUTES
+    SPAWNED = "spawned"  # parent/child process relationship
+    SAME_OBJECT = "same_object"  # shared file / registry key / IP target
+
+
+def _empty_metadata_dict() -> dict[str, Any]:
+    """Helper for strictly typed Pydantic dictionary factories."""
+    return {}
 
 
 class Event(BaseModel):
@@ -66,27 +71,34 @@ class Event(BaseModel):
     event_type: EventType
     actor: str
     target: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=_empty_metadata_dict)
 
 
 class Evidence(BaseModel):
     event_ids: list[str]
     explanation: str
-    parent_conclusion_id: str | None = None  # set when this evidence backs a chained/derived fact
+    parent_conclusion_id: str | None = (
+        None  # set when this evidence backs a chained/derived fact
+    )
 
 
 class Conclusion(BaseModel):
     rule_id: str
     technique_id: str  # MITRE ATT&CK technique, e.g. "T1547.001"
-    tactic: str        # e.g. "Persistence"
+    tactic: str  # e.g. "Persistence"
     description: str
     evidence: list[Evidence]
+
+
+def _empty_conclusion_list() -> list[Conclusion]:
+    """Helper for strictly typed Pydantic list factories."""
+    return []
 
 
 class Incident(BaseModel):
     id: str
     summary: str
-    conclusions: list[Conclusion] = Field(default_factory=list)
+    conclusions: list[Conclusion] = Field(default_factory=_empty_conclusion_list)
 
 
 class DemoRule(BaseModel):
@@ -95,7 +107,9 @@ class DemoRule(BaseModel):
 
     rule_id: str
     intent: str
-    chained: bool = False  # True == consumes a prior Conclusion (proves forward chaining)
+    chained: bool = (
+        False  # True == consumes a prior Conclusion (proves forward chaining)
+    )
 
 
 # The 2-3 demo rules named in Step 2. Full logic is implemented in
