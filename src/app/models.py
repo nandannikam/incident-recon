@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -65,7 +66,7 @@ class Event(BaseModel):
     event_type: EventType
     actor: str
     target: str
-    metadata: dict = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Evidence(BaseModel):
@@ -77,7 +78,7 @@ class Evidence(BaseModel):
 class Conclusion(BaseModel):
     rule_id: str
     technique_id: str  # MITRE ATT&CK technique, e.g. "T1547.001"
-    tactic: str         # e.g. "Persistence"
+    tactic: str        # e.g. "Persistence"
     description: str
     evidence: list[Evidence]
 

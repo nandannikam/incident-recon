@@ -27,7 +27,7 @@ def _configure_logging() -> None:
 
     root.addHandler(stream_handler)
     root.addHandler(file_handler)
-    root._incident_configured = True  # type: ignore[attr-defined]
+    setattr(root, "_incident_configured", True)  # noqa: B010
 
 
 _configure_logging()
