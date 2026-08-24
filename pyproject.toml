@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "incident-reconstruction"
+version = "0.1.0"
+description = "AI-Powered Cybersecurity Incident Reconstruction & Analysis System (Phase 1 backend)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "pydantic>=2.9,<3",
+    "pandas>=2.2,<3",
+    "networkx==3.4.2",
+    "python-multipart==0.0.20",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.3.4", "httpx==0.28.1"]
+
+# --- src layout: "app" and "app.rules" live under src/ ----------------------
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["app", "app.rules"]
+
+# --- Belt-and-braces: works even before `pip install -e .` is run ----------
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["src/tests"]
