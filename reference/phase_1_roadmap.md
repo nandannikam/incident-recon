@@ -201,6 +201,37 @@ The original PDF had three ordering defects, two duplicated steps, and ~5 missin
 
 ---
 
+## 2.5 Current Status
+
+**Must-do (critical path, ~5–7 hrs):**
+
+- **Step 5 — Graph builder** (~1–2 hrs): NetworkX, `followed_by`/`spawned`/`same_object` edges.
+- **Step 6 — Rules** (~1–2 hrs): 3 rule functions — `REG-PERSIST-01`, `PSH-STAGING-01`, chained `PERSIST-ESTABLISHED-01` (intents already in `models.py`).
+- **Step 7 — Engine** (~2 hrs): forward-chaining loop with dedup + max iterations.
+- **Step 8 — Orchestrator + CLI** (~1 hr): `run_analysis()` + `python -m app.orchestrator src/data/attack_sample.csv` → **the demo output**.
+
+**Bonus (if time remains):**
+
+- **Step 9 — Storage** (~30 min): SQLite, tiny.
+- **Step 10 — FastAPI** (~1–2 hrs): thin wrapper, `/docs` page is a nice wow.
+
+**Skip:** Mordor datasets, README polish, formal E2E test file.
+
+**Expected demo output:**
+
+```
+$ python -m app.orchestrator src/data/attack_sample.csv
+→ Parsed 17 events, skipped 0
+→ Incident: 3 conclusions
+  • REG-PERSIST-01 (T1547.001, Persistence) — evidence: [event_ids...]
+  • PSH-STAGING-01 (T1059.001, Execution) — evidence: [event_ids...]
+  • PERSIST-ESTABLISHED-01 (chained!) — evidence: [event_ids + parent conclusion]
+```
+
+Plus the negative case: `benign_sample.csv → 0 conclusions` — proves the engine doesn't fire on everything.
+
+---
+
 ## 3. Step-by-Step Roadmap
 
 ---
