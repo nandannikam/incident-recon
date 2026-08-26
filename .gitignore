@@ -11,3 +11,4 @@ dist/
 .env
 src/data/mordor/*
 !src/data/mordor/.gitkeep
+.opencode/

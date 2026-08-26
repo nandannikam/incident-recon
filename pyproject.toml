@@ -17,12 +17,13 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest==9.1.1", "httpx==0.28.1"]
 
-# --- src layout: "app" and "app.rules" live under src/ --------------------
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["app", "app.rules"]
 
-# --- Belt-and-braces: works even before `pip install -e .` is run ---------
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["src/tests"]
+
+[tool.basedpyright]
+typeCheckingMode = "basic"
