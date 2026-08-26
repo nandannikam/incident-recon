@@ -123,9 +123,7 @@ def parse_log(file_path: str) -> ParseResult:
     # Assign provenance from the ORIGINAL row position, before any sorting.
     for original_index, row in df.iterrows():
         try:
-            values = {
-                f: _clean_required_field(row.get(f)) for f in REQUIRED_STRING_FIELDS
-            }
+            values = {f: _clean_required_field(row.get(f)) for f in REQUIRED_STRING_FIELDS}
             missing = [f for f, v in values.items() if v is None]
             if missing:
                 raise ValueError(f"missing required field(s): {', '.join(missing)}")
@@ -150,7 +148,7 @@ def parse_log(file_path: str) -> ParseResult:
                     metadata=metadata,
                 )
             )
-        except Exception as exc:  # noqa: BLE001 - deliberately broad: any bad row is skipped
+        except Exception as exc:  # deliberately broad: any bad row is skipped
             skipped += 1
             msg = f"row {original_index}: {exc}"
             errors.append(msg)
@@ -167,6 +165,4 @@ def parse_log(file_path: str) -> ParseResult:
         total_rows,
         file_path,
     )
-    return ParseResult(
-        events=events, skipped=skipped, total_rows=total_rows, errors=errors
-    )
+    return ParseResult(events=events, skipped=skipped, total_rows=total_rows, errors=errors)
