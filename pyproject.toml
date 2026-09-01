@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "incident-reconstruction"
+version = "0.1.0"
+description = "AI-Powered Cybersecurity Incident Reconstruction & Analysis System (Phase 1 backend)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.141.1",
+    "pydantic==2.13.4",
+    "pandas==3.0.5",
+    "networkx==3.6.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "httpx==0.28.1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["app", "app.rules"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["src/tests"]
+
+[tool.basedpyright]
+typeCheckingMode = "basic"

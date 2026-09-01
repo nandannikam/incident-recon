@@ -1,0 +1,11 @@
+timestamp,source,event_type,actor,target,metadata
+2024-02-01T09:00:00Z,HOST02,process_execution,USER02,outlook.exe,"{""pid"": 500, ""parentpid"": 100}"
+2024-02-01T09:00:20Z,HOST02,network_connection,outlook.exe,52.96.0.10,"{""port"": 443, ""direction"": ""outbound"", ""reason"": ""exchange sync""}"
+2024-02-01T09:15:00Z,HOST02,file_creation,USER02,C:\Users\USER02\Documents\report.docx,"{""parent"": ""winword.exe""}"
+2024-02-01T09:30:00Z,HOST02,powershell_execution,ADMIN01,powershell.exe,"{""pid"": 700, ""parentpid"": 1, ""scriptblock"": ""Get-Service | Where-Object Status -eq 'Running'""}"
+2024-02-01T09:45:00Z,HOST02,network_connection,chrome.exe,142.250.72.14,"{""port"": 443, ""direction"": ""outbound"", ""reason"": ""browsing""}"
+2024-02-01T10:00:00Z,HOST02,registry_modification,USER02,HKCU:\Software\Microsoft\Office\16.0\Common\General\LastUsedFont,"{""value"": ""Calibri""}"
+2024-02-01T10:20:00Z,HOST02,process_execution,USER02,notepad.exe,"{""pid"": 800, ""parentpid"": 1}"
+2024-02-01T10:20:05Z,HOST02,file_creation,USER02,C:\Users\USER02\Documents\notes.txt,"{""parent"": ""notepad.exe""}"
+2024-02-01T10:40:00Z,HOST02,file_download,USER02,C:\Users\USER02\Downloads\quarterly.pdf,"{""url"": ""https://intranet.example/quarterly.pdf""}"
+2024-02-01T11:00:00Z,HOST02,network_connection,teams.exe,52.112.0.5,"{""port"": 443, ""direction"": ""outbound"", ""reason"": ""video call""}"
