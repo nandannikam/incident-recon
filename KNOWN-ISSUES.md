@@ -65,3 +65,57 @@ All Step 1–4 defects are resolved: logging configuration (#1), `src`-layout pa
 ## Deliberately ignored (per §2.5 "Skip")
 
 README polish, `data/README.md`, Mordor dataset downloads, the formal E2E test file, and lint/type-checker warnings (`RUF100` unused `noqa`, `UP042`, no `[tool.ruff]` config).
+
+---
+
+# KNOWN ISSUES — Phase 2 (Steps 1–5)
+
+Found via an independent audit of the Phase 2 backend (see `reference/phase_2_roadmap.md`). Ordered by importance; each issue notes the Phase 2 step it originates from. Step references are to the roadmap's step numbering (1 = Mordor parser, 2 = real dataset integration, 3 = graph viz, 4 = API hardening, 5 = knowledge-base expansion).
+
+## 🔴 CRITICAL
+
+### 1. Real-log parser is never wired into the pipeline (Step 2, also Steps 4/7)
+
+`parse_mordor` is only called by the standalone `validate_mordor_dataset.py`. The main path (`run_analysis` → `parse_log`) is CSV-only, so:
+- `python -m app.orchestrator <real dataset.json>` crashes with a pandas `ParserError`.
+- `POST /analyze` with a real NDJSON log → **500 Internal Server Error** (unhandled exception).
+- Step 2's "done when" — *at least one real dataset runs through `run_analysis` without crashing* — is **not met**. Real data only works in the validator, not the pipeline.
+
+### 2. Real `.json` datasets can't be uploaded or analyzed (Step 4)
+
+`POST /upload` accepts only `.csv`/`.ndjson`, but every actual Mordor dataset ends in `.json` → **400 "Only .csv or .ndjson files are accepted"**. `/analyze` has no file-type/format dispatch and no type validation, so it accepts `.json`/`.ndjson` but then crashes (see #1). Net effect: neither endpoint can process the real datasets.
+
+## 🟠 HIGH
+
+### 3. Graph edge explosion — pipeline can't scale to real logs (Step 2, amplified by Step 5)
+
+`followed_by` (all in-window pairs) + `same_object` (cliques) produce combinatorial edges on dense real captures. Measured: **1,052 events → 1,105,652 edges** (4.2 s just to build); **10,377 events → `build_graph` times out (>60 s)** and `analyze` would be far worse. Already flagged as Phase 1 KNOWN-ISSUES #5, but only "at demo scale" — on real data this blocks the Step 2 end-to-end goal.
+
+### 4. New rules don't actually drive conclusions on real data (Step 5)
+
+- `C2-BEACON-01` (network) requires `metadata["reason"]` to contain `"c2"` — real Sysmon network events have no such field, so it **never fires on real data** (only on the hand-crafted CSV with a synthetic `reason=c2`). On the real bitsadmin dataset it produced **0** C2 conclusions.
+- `PERSIST-ESTABLISHED-01` needs PSH-STAGING first (PowerShell + file_download), which the chosen datasets don't trigger.
+- `REG-PERSIST-01` over-fires: **66 conclusions from 89 events** on the bitsadmin dataset (noise). Step 5's "done when" (network + log-deletion events actually drive conclusions on real data) is not met.
+
+## 🟡 MEDIUM
+
+### 5. `/analyze` doesn't return parse diagnostics (Step 4)
+
+Step 4's checklist explicitly asked for skipped-rows/errors in the `/analyze` response; it returns only the `Incident` (`response_model=Incident`).
+
+### 6. Missing `src/data/mordor/README.md` (Step 2)
+
+Step 2's checklist and done-when require a README documenting the datasets + license (MIT). The directory has data but no README.
+
+### 7. ~48 MB of real datasets committed to git (Step 2)
+
+The roadmap says mordor data should be git-ignored (except `.gitkeep`); the team reversed that and committed the actual files, including a 48 MB `cmd_wevtutil_modify_security_eventlog_path.json`. Repo bloat + deviation (not a functional bug).
+
+### 8. `spawned` edges never fire on real data (Step 1 / Step 3)
+
+`graph.py` reads lowercase `metadata["pid"]`/`["parentpid"]`, but Sysmon/Mordor metadata uses `ProcessId`/`ParentProcessId` (capitalized) — so no SPAWNED edges from real logs. Works on `attack_sample.csv` because its CSV metadata uses lowercase pid keys.
+
+## Minor (setup / hygiene)
+
+- **venv under-provisioned (Steps 2–3):** `matplotlib`/`scipy` are in `requirements.txt` but missing from the venv, so tests fail to even collect until installed.
+- **Stale KNOWN-ISSUES header (chore):** the top of this file still describes Phase 1 "Steps 1–8" and the 🔴 critical section still claims the critical path is unimplemented, which is no longer true.
