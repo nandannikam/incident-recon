@@ -10,6 +10,8 @@ from app.rules.registry import (
     detect_persistence_established,
     detect_powershell_staging,
     detect_registry_persistence,
+    detect_network_beacon,
+    detect_log_deletion,
 )
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
@@ -61,6 +63,8 @@ def test_registry_contains_the_three_demo_rules() -> None:
         detect_registry_persistence,
         detect_powershell_staging,
         detect_persistence_established,
+        detect_network_beacon,
+        detect_log_deletion,
     ]
 
 
@@ -186,7 +190,7 @@ def test_persistence_established_fires_when_staging_fact_present() -> None:
     assert conclusion.rule_id == "PERSIST-ESTABLISHED-01"
     assert conclusion.technique_id == "T1547.001"
     assert conclusion.tactic == "Persistence"
-    assert conclusion.evidence[0].parent_conclusion_id == "PSH-STAGING-01"
+    assert conclusion.evidence[0].parent_conclusion_id == staging.conclusion_id
     assert set(conclusion.evidence[0].event_ids) == set(
         staging.evidence[0].event_ids
     ) | {reg.event_id}

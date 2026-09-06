@@ -11,6 +11,7 @@ them — the signature stays uniform (see KNOWN-ISSUES #4).
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable
 from datetime import timedelta
 
@@ -85,6 +86,7 @@ def detect_registry_persistence(
                 and _within_window(proc, reg)
             ):
                 return Conclusion(
+                    conclusion_id=uuid.uuid4().hex,
                     rule_id="REG-PERSIST-01",
                     technique_id="T1547.001",
                     tactic="Persistence",
@@ -126,6 +128,7 @@ def detect_powershell_staging(
                 and _within_window(psh, download)
             ):
                 return Conclusion(
+                    conclusion_id=uuid.uuid4().hex,
                     rule_id="PSH-STAGING-01",
                     technique_id="T1059.001",
                     tactic="Execution",
@@ -171,6 +174,7 @@ def detect_persistence_established(
                 _same_host(s, reg) and _within_window(s, reg) for s in staging_events
             ):
                 return Conclusion(
+                    conclusion_id=uuid.uuid4().hex,
                     rule_id="PERSIST-ESTABLISHED-01",
                     technique_id="T1547.001",
                     tactic="Persistence",
@@ -188,10 +192,89 @@ def detect_persistence_established(
                                 f"{TIME_WINDOW_MINUTES} minutes, establishing "
                                 "persistence."
                             ),
-                            parent_conclusion_id="PSH-STAGING-01",
+                            parent_conclusion_id=staging.conclusion_id,
                         )
                     ],
                 )
+    return None
+
+
+def detect_network_beacon(
+    neighborhood: list[Event],
+    graph: nx.DiGraph,
+    facts: list[Conclusion],  # unused here — uniform rule signature
+) -> Conclusion | None:
+    """C2-BEACON-01 (T1071): process_execution then network_connection on
+    the same host within the window, where the connection's metadata
+    reason marks it as C2 activity (not ordinary browsing/sync/video)."""
+    proc_execs = [
+        e for e in neighborhood if e.event_type == EventType.PROCESS_EXECUTION
+    ]
+    net_conns = [
+        e
+        for e in neighborhood
+        if e.event_type == EventType.NETWORK_CONNECTION
+        and "c2" in str(e.metadata.get("reason", "")).lower()
+    ]
+    for proc in proc_execs:
+        for net in net_conns:
+            if (
+                _same_host(proc, net)
+                and proc.timestamp <= net.timestamp
+                and _within_window(proc, net)
+            ):
+                return Conclusion(
+                    conclusion_id=uuid.uuid4().hex,
+                    rule_id="C2-BEACON-01",
+                    technique_id="T1071",
+                    tactic="Command and Control",
+                    description=(
+                        "Possible C2 beacon: a process execution was followed by an "
+                        "outbound network connection flagged as command-and-control "
+                        "activity within the time window."
+                    ),
+                    evidence=[
+                        Evidence(
+                            event_ids=[proc.event_id, net.event_id],
+                            explanation=(
+                                f"Process {proc.actor} executed ({proc.target}) on "
+                                f"{proc.source}, then connected to {net.target} within "
+                                f"{TIME_WINDOW_MINUTES} minutes."
+                            ),
+                        )
+                    ],
+                )
+    return None
+
+
+def detect_log_deletion(
+    neighborhood: list[Event],
+    graph: nx.DiGraph,
+    facts: list[Conclusion],  # unused here — uniform rule signature
+) -> Conclusion | None:
+    """LOG-CLEAR-01 (T1070): a log_deletion event on its own is evidence of
+    defense evasion — no pairing needed, a single event is enough."""
+    log_dels = [e for e in neighborhood if e.event_type == EventType.LOG_DELETION]
+    for entry in log_dels:
+        return Conclusion(
+            conclusion_id=uuid.uuid4().hex,
+            rule_id="LOG-CLEAR-01",
+            technique_id="T1070",
+            tactic="Defense Evasion",
+            description=(
+                "Possible defense evasion: security or system logs were cleared, "
+                "likely to hide prior activity."
+            ),
+            evidence=[
+                Evidence(
+                    event_ids=[entry.event_id],
+                    explanation=(
+                        f"{entry.actor} cleared logs on {entry.source} "
+                        f"({entry.target})."
+                    ),
+                )
+            ],
+        )
     return None
 
 
@@ -199,4 +282,6 @@ RULES: list[RuleFunc] = [
     detect_registry_persistence,
     detect_powershell_staging,
     detect_persistence_established,
+    detect_network_beacon,
+    detect_log_deletion,
 ]

@@ -83,9 +83,10 @@ class Evidence(BaseModel):
 
 
 class Conclusion(BaseModel):
+    conclusion_id: str
     rule_id: str
-    technique_id: str  # MITRE ATT&CK technique, e.g. "T1547.001"
-    tactic: str  # e.g. "Persistence"
+    technique_id: str
+    tactic: str
     description: str
     evidence: list[Evidence]
 

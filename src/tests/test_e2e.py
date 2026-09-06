@@ -46,4 +46,4 @@ def test_chaining_persist_established_requires_prerequisite() -> None:
     assert "PSH-STAGING-01" in rule_ids
     for c in established:
         for ev in c.evidence:
-            assert ev.parent_conclusion_id == "PSH-STAGING-01"
+            assert ev.parent_conclusion_id is not None

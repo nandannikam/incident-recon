@@ -55,6 +55,7 @@ def test_incident_round_trip_with_derived_conclusion():
         parent_conclusion_id=None,
     )
     base_conclusion = Conclusion(
+        conclusion_id="test-conclusion-1",
         rule_id="PSH-STAGING-01",
         technique_id="T1059.001",
         tactic="Execution",
@@ -68,6 +69,7 @@ def test_incident_round_trip_with_derived_conclusion():
         parent_conclusion_id="PSH-STAGING-01",
     )
     chained_conclusion = Conclusion(
+        conclusion_id="test-conclusion-2",
         rule_id="PERSIST-ESTABLISHED-01",
         technique_id="T1547.001",
         tactic="Persistence",
