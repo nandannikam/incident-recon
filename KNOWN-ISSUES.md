@@ -72,24 +72,22 @@ README polish, `data/README.md`, Mordor dataset downloads, the formal E2E test f
 
 Found via an independent audit of the Phase 2 backend (see `reference/phase_2_roadmap.md`). Ordered by importance; each issue notes the Phase 2 step it originates from. Step references are to the roadmap's step numbering (1 = Mordor parser, 2 = real dataset integration, 3 = graph viz, 4 = API hardening, 5 = knowledge-base expansion).
 
+## Resolved by the format-dispatch fix (commits `0cac4ef` / `cd63c58` / `0e29960`)
+
+- **#1 — Real-log parser is never wired into the pipeline (Step 2, also Steps 4/7)** — **FIXED.** `run_analysis` now routes through `dispatch.parse_any_log`, so real `.json`/`.ndjson` datasets parse end-to-end; `POST /analyze` and the CLI return a result instead of a `500` `ParserError`.
+- **#8 — `spawned` edges never fire on real data (Step 1 / Step 3)** — **FIXED.** `parse_any_log` adds `ProcessId`/`ParentProcessId` → `pid`/`parentpid` metadata aliases, so SPAWNED edges now appear on real Mordor data.
+
 ## 🔴 CRITICAL
 
-### 1. Real-log parser is never wired into the pipeline (Step 2, also Steps 4/7)
+### 2. `/upload` still rejects real `.json` datasets (Step 4) — PARTIALLY FIXED
 
-`parse_mordor` is only called by the standalone `validate_mordor_dataset.py`. The main path (`run_analysis` → `parse_log`) is CSV-only, so:
-- `python -m app.orchestrator <real dataset.json>` crashes with a pandas `ParserError`.
-- `POST /analyze` with a real NDJSON log → **500 Internal Server Error** (unhandled exception).
-- Step 2's "done when" — *at least one real dataset runs through `run_analysis` without crashing* — is **not met**. Real data only works in the validator, not the pipeline.
-
-### 2. Real `.json` datasets can't be uploaded or analyzed (Step 4)
-
-`POST /upload` accepts only `.csv`/`.ndjson`, but every actual Mordor dataset ends in `.json` → **400 "Only .csv or .ndjson files are accepted"**. `/analyze` has no file-type/format dispatch and no type validation, so it accepts `.json`/`.ndjson` but then crashes (see #1). Net effect: neither endpoint can process the real datasets.
+The dispatch fix made `POST /analyze` handle real `.json` datasets, but `POST /upload` (`main.py`) still whitelists only `.csv`/`.ndjson`, so uploading an actual Mordor dataset (all of which end in `.json`) still returns **400 "Only .csv or .ndjson files are accepted"**. The two endpoints now behave inconsistently on the same file: you can analyze a `.json` but cannot upload it.
 
 ## 🟠 HIGH
 
-### 3. Graph edge explosion — pipeline can't scale to real logs (Step 2, amplified by Step 5)
+### 3. Graph edge explosion — pipeline can't scale to real logs (Step 2, amplified by Step 5) — NOW REACHABLE
 
-`followed_by` (all in-window pairs) + `same_object` (cliques) produce combinatorial edges on dense real captures. Measured: **1,052 events → 1,105,652 edges** (4.2 s just to build); **10,377 events → `build_graph` times out (>60 s)** and `analyze` would be far worse. Already flagged as Phase 1 KNOWN-ISSUES #5, but only "at demo scale" — on real data this blocks the Step 2 end-to-end goal.
+`followed_by` (all in-window pairs) + `same_object` (cliques) produce combinatorial edges on dense real captures. Measured: **1,052 events → 1,105,652 edges**; **`run_analysis` on that dataset takes ~18 s and returns 769 spurious conclusions**; the 10,377-event `cmd_wevtutil…json` still effectively times out. Now that the dispatch fix wires real data through `run_analysis`, `/analyze` accepts a large dataset and then **hangs / floods conclusions** instead of failing fast — the new test only exercises the tiny bitsadmin file (89 events), so this is never caught. Already flagged as Phase 1 KNOWN-ISSUES #5, but only "at demo scale" — on real data this blocks the Step 2 end-to-end goal.
 
 ### 4. New rules don't actually drive conclusions on real data (Step 5)
 
@@ -97,11 +95,15 @@ Found via an independent audit of the Phase 2 backend (see `reference/phase_2_ro
 - `PERSIST-ESTABLISHED-01` needs PSH-STAGING first (PowerShell + file_download), which the chosen datasets don't trigger.
 - `REG-PERSIST-01` over-fires: **66 conclusions from 89 events** on the bitsadmin dataset (noise). Step 5's "done when" (network + log-deletion events actually drive conclusions on real data) is not met.
 
+### 9. Silent zero-event misdetection on extension-only routing (Step 4 / Step 1) — NEW
+
+`detect_format` routes purely by file extension (`.json`/`.ndjson` → `parse_mordor`) with no content validation, so any non-NDJSON file named `.json`/`.ndjson` is sent to `parse_mordor` and silently yields **0 events** instead of raising a clear error. Verified: a valid CSV renamed `attack_sample.json` parses to 0 events / 19 "malformed" and returns a successful-looking empty Incident. Because `/analyze` still doesn't return parse diagnostics (#5), the user sees "Analyzed 0 events, 0 conclusions" with no indication the wrong parser ran. The content-sniffing fallback only runs for unknown extensions, so it never catches this case.
+
 ## 🟡 MEDIUM
 
-### 5. `/analyze` doesn't return parse diagnostics (Step 4)
+### 5. `/analyze` doesn't return parse diagnostics (Step 4) — PARTIAL
 
-Step 4's checklist explicitly asked for skipped-rows/errors in the `/analyze` response; it returns only the `Incident` (`response_model=Incident`).
+Step 4's checklist asked for skipped-rows/errors in the `/analyze` response; it still returns only the `Incident` (`response_model=Incident`). Partial progress: `Incident.summary` now includes the skipped-row count.
 
 ### 6. Missing `src/data/mordor/README.md` (Step 2)
 
@@ -111,9 +113,9 @@ Step 2's checklist and done-when require a README documenting the datasets + lic
 
 The roadmap says mordor data should be git-ignored (except `.gitkeep`); the team reversed that and committed the actual files, including a 48 MB `cmd_wevtutil_modify_security_eventlog_path.json`. Repo bloat + deviation (not a functional bug).
 
-### 8. `spawned` edges never fire on real data (Step 1 / Step 3)
+### 10. Regression tests don't cover misdetection or scale (Step 4 / Step 2) — NEW
 
-`graph.py` reads lowercase `metadata["pid"]`/`["parentpid"]`, but Sysmon/Mordor metadata uses `ProcessId`/`ParentProcessId` (capitalized) — so no SPAWNED edges from real logs. Works on `attack_sample.csv` because its CSV metadata uses lowercase pid keys.
+`test_dispatch.py` only asserts happy-path routing on a known-good `.json` dataset and a missing-file error. There is no test for a mislabeled file (a CSV named `.json`, or a `.json` that isn't NDJSON) — so the silent zero-event path (#9) ships unguarded — and it only exercises the tiny bitsadmin dataset (89 events), so the scale/hang problem (#3) is never caught.
 
 ## Minor (setup / hygiene)
 
