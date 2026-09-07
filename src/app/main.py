@@ -16,6 +16,13 @@ KNOWN-ISSUES Phase 2 fixes applied here:
       /analyze now returns an AnalyzeResponse wrapping both the Incident
       and parse diagnostics (skipped count, total rows, a capped list of
       error strings), instead of silently discarding them.
+  #9: detect_format previously routed to parse_mordor purely on a .json/
+      .ndjson extension, with no content check -- so a mislabeled file
+      (e.g. a CSV renamed to .json) silently produced a 0-event
+      "successful" Incident instead of an error. dispatch.py now verifies
+      content for every non-.csv file; that raises UnknownLogFormatError,
+      which /analyze and /upload now catch here and turn into a clear
+      422 response instead of an unhandled 500.
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from app.dispatch import UnknownLogFormatError
 from app.models import Incident
 from app.orchestrator import run_analysis_with_diagnostics
 from app.storage import get_incident, save_incident
@@ -121,7 +129,11 @@ async def analyze_endpoint(file: UploadFile = File(...)):
 
     path = _save_upload(filename, contents)
 
-    incident, result = run_analysis_with_diagnostics(path)
+    try:
+        incident, result = run_analysis_with_diagnostics(path)
+    except UnknownLogFormatError as exc:
+        raise HTTPException(422, f"Could not determine file format: {exc}") from exc
+
     save_incident(incident)
 
     return AnalyzeResponse(
