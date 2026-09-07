@@ -27,7 +27,9 @@ KNOWN-ISSUES Phase 2 fixes applied here:
 
 from __future__ import annotations
 
+import tempfile
 import uuid
+from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -96,11 +98,21 @@ def _validate_extension(filename: str) -> None:
 
 
 def _save_upload(filename: str, contents: bytes) -> str:
-    """Write uploaded bytes to a collision-proof temp path and return it."""
-    path = f"/tmp/{uuid.uuid4().hex}_{filename}"
+    """Write uploaded bytes to a collision-proof temp path and return it.
+
+    Uses tempfile.gettempdir() instead of a hardcoded "/tmp/..." path.
+    "/tmp" doesn't exist on Windows by default, so the old hardcoded path
+    raised FileNotFoundError on every upload when the server ran on
+    Windows (open() cannot create missing parent directories).
+    tempfile.gettempdir() resolves to the correct OS temp directory
+    (e.g. C:\\Users\\<user>\\AppData\\Local\\Temp on Windows, /tmp on
+    Linux/Mac) so this works the same way regardless of platform.
+    """
+    temp_dir = Path(tempfile.gettempdir())
+    path = temp_dir / f"{uuid.uuid4().hex}_{filename}"
     with open(path, "wb") as f:
         f.write(contents)
-    return path
+    return str(path)
 
 
 @app.post("/upload")
