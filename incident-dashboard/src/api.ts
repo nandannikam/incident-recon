@@ -71,7 +71,23 @@ export async function analyzeCsv(file: File): Promise<Incident> {
     );
   }
 
-  return (await res.json()) as Incident;
+  // The backend returns AnalyzeResponse = { incident, diagnostics } (added
+  // for parse diagnostics, KNOWN-ISSUES Phase 2 #5). The old contract was
+  // the bare Incident — unwrap defensively so a future shape change fails
+  // loudly here instead of crashing the React tree.
+  const body: unknown = await res.json();
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "incident" in body &&
+    typeof (body as { incident: unknown }).incident === "object" &&
+    (body as { incident: unknown }).incident !== null
+  ) {
+    return (body as { incident: Incident }).incident;
+  }
+  throw new Error(
+    "Unexpected response shape from the analysis API — expected { incident, diagnostics }.",
+  );
 }
 
 /** GET /incident/{id} — fetch a previously analyzed incident. */

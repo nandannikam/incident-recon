@@ -93,7 +93,7 @@ function Header({
           <span className="brand-mark">
             <ChainMark />
           </span>
-          <span className="brand-name">CHAINTRACE</span>
+          <span className="brand-name">IncidentRecon </span>
           <span className="brand-sub">Incident Reconstruction Console</span>
         </div>
         <div className="header-right">

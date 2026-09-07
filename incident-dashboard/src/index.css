@@ -1,5 +1,5 @@
 /* ============================================================
-   CHAINTRACE — Incident Reconstruction Console
+   IncidentRecon — Incident Reconstruction Console
    Design language: Sentry-inspired violet midnight, electric
    lime accents, Rubik UI type, Monaco code, console cadence.
    Tokens mirror DESIGN.md.
@@ -25,7 +25,8 @@
   --ring-focus: #9dc1f5;
 
   /* type */
-  --font-ui: "Rubik", -apple-system, "Segoe UI", system-ui, Helvetica, Arial, sans-serif;
+  --font-ui:
+    "Rubik", -apple-system, "Segoe UI", system-ui, Helvetica, Arial, sans-serif;
   --font-display: "Archivo", "Rubik", system-ui, sans-serif;
   --font-code: "Monaco", "Menlo", "Ubuntu Mono", monospace;
 
@@ -72,15 +73,51 @@ body::before {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(1px 1px at 22px 34px, rgba(255, 255, 255, 0.14) 50%, transparent 51%),
-    radial-gradient(1px 1px at 137px 118px, rgba(255, 255, 255, 0.09) 50%, transparent 51%),
-    radial-gradient(1.5px 1.5px at 78px 190px, rgba(255, 255, 255, 0.07) 50%, transparent 51%),
-    radial-gradient(1px 1px at 246px 76px, rgba(255, 255, 255, 0.06) 50%, transparent 51%),
-    radial-gradient(1.5px 1.5px at 318px 224px, rgba(255, 255, 255, 0.05) 50%, transparent 51%),
-    radial-gradient(1200px 640px at 72% -12%, rgba(66, 32, 130, 0.38), transparent 62%),
-    radial-gradient(900px 520px at 8% 108%, rgba(250, 127, 170, 0.07), transparent 60%),
+    radial-gradient(
+      1px 1px at 22px 34px,
+      rgba(255, 255, 255, 0.14) 50%,
+      transparent 51%
+    ),
+    radial-gradient(
+      1px 1px at 137px 118px,
+      rgba(255, 255, 255, 0.09) 50%,
+      transparent 51%
+    ),
+    radial-gradient(
+      1.5px 1.5px at 78px 190px,
+      rgba(255, 255, 255, 0.07) 50%,
+      transparent 51%
+    ),
+    radial-gradient(
+      1px 1px at 246px 76px,
+      rgba(255, 255, 255, 0.06) 50%,
+      transparent 51%
+    ),
+    radial-gradient(
+      1.5px 1.5px at 318px 224px,
+      rgba(255, 255, 255, 0.05) 50%,
+      transparent 51%
+    ),
+    radial-gradient(
+      1200px 640px at 72% -12%,
+      rgba(66, 32, 130, 0.38),
+      transparent 62%
+    ),
+    radial-gradient(
+      900px 520px at 8% 108%,
+      rgba(250, 127, 170, 0.07),
+      transparent 60%
+    ),
     var(--surface-canvas-dark);
-  background-size: 360px 280px, 360px 280px, 360px 280px, 360px 280px, 360px 280px, 100% 100%, 100% 100%, 100% 100%;
+  background-size:
+    360px 280px,
+    360px 280px,
+    360px 280px,
+    360px 280px,
+    360px 280px,
+    100% 100%,
+    100% 100%,
+    100% 100%;
 }
 
 ::selection {
@@ -404,7 +441,9 @@ code,
   border: 1px solid var(--hairline-violet);
   border-radius: var(--r-xxl);
   padding: 32px;
-  transition: border-color 160ms ease, background-color 160ms ease;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease;
 }
 
 .upload-zone.dragging {
@@ -499,7 +538,12 @@ code,
   right: 0;
   bottom: 0;
   height: 2px;
-  background: linear-gradient(90deg, transparent, var(--accent-violet-bright), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent-violet-bright),
+    transparent
+  );
   animation: scan 1.4s linear infinite;
   display: none;
 }
@@ -751,7 +795,9 @@ code,
   padding: 10px 18px;
   min-height: 40px;
   cursor: pointer;
-  transition: background-color 140ms ease, color 140ms ease;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
 }
 
 .tab-btn:hover {
@@ -831,7 +877,9 @@ code,
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  transition: border-color 160ms ease, transform 160ms ease;
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease;
   animation: rise 480ms ease both;
 }
 
