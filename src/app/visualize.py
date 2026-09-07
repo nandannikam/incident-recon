@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import matplotlib
-matplotlib.use("Agg")  # no display needed, just save to file
-import matplotlib.pyplot as plt
 import networkx as nx
+
+matplotlib.use("Agg")  # no display needed, just save to file
+
+import matplotlib.pyplot as plt
+
 from app.models import EventType
 
 TYPE_COLORS = {
@@ -28,13 +33,22 @@ def visualize(graph: nx.DiGraph, output_path: str = "graph.png") -> None:
         for n in graph.nodes
     }
 
+    # nx.draw()'s `arrows` kwarg was removed from its type signature in
+    # newer NetworkX releases (arrows are drawn automatically for a
+    # DiGraph; there is no longer a boolean toggle on draw() itself).
+    # Passing it either silently does nothing or raises depending on
+    # version, and Pylance flags it as an invalid parameter against the
+    # installed version's stubs. Arrowheads on a DiGraph are drawn by
+    # default, so the kwarg is simply unnecessary here -- dropping it
+    # keeps the same visual result across NetworkX versions instead of
+    # pinning to one specific version's draw() signature.
     nx.draw(
-        graph, pos,
+        graph,
+        pos,
         node_color=node_colors,
         labels=labels,
         node_size=800,
         font_size=6,
-        arrows=True,
         edge_color="gray",
     )
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -50,5 +64,5 @@ def visualize(graph: nx.DiGraph, output_path: str = "graph.png") -> None:
             if "kind" in data and isinstance(data["kind"], (list, set)):
                 data["kind"] = ",".join(str(k) for k in data["kind"])
         nx.write_graphml(graph_copy, graphml_path)
-    except Exception as exc:
-        print(f"GraphML export skipped: {exc}") 
+    except Exception as exc:  # noqa: BLE001 - GraphML export is optional/best-effort
+        print(f"GraphML export skipped: {exc}")
