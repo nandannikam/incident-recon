@@ -77,33 +77,34 @@ Found via an independent audit of the Phase 2 backend (see `reference/phase_2_ro
 - **#1 — Real-log parser is never wired into the pipeline (Step 2, also Steps 4/7)** — **FIXED.** `run_analysis` now routes through `dispatch.parse_any_log`, so real `.json`/`.ndjson` datasets parse end-to-end; `POST /analyze` and the CLI return a result instead of a `500` `ParserError`.
 - **#8 — `spawned` edges never fire on real data (Step 1 / Step 3)** — **FIXED.** `parse_any_log` adds `ProcessId`/`ParentProcessId` → `pid`/`parentpid` metadata aliases, so SPAWNED edges now appear on real Mordor data.
 
+## Resolved by the real-log hardening fix (commit `f4ef633`)
+
+- **#2 — `/upload` rejects real `.json` datasets (Step 4)** — **FIXED.** Both `/upload` and `/analyze` now accept `.csv`, `.ndjson`, and `.json` (verified: `/upload` on a real `.json` → 200).
+- **#3 — Graph edge explosion (Step 2, amplified by Step 5)** — **FIXED.** Fan-out is capped (`MAX_EDGES_PER_NODE_PER_KIND = 50` per node per edge kind). Measured after fix: **1,052 events → 1.5 s / 7 conclusions** (was 18 s / 769); **10,377 events → completes in ~17 s** (was >60 s timeout). Residual: ~17 s is still slow for `/analyze` on the largest dataset, and 641,919 edges is still large — acceptable for the demo, not for production.
+- **#4 — New rules don't drive conclusions on real data (Step 5)** — **FIXED (partially).** `C2-BEACON-01` no longer depends on the synthetic `reason="c2"` field; it now heuristically flags outbound connections to non-standard ports and **fires on real data** (7 on psexec, 4 on bitsadmin). `REG-PERSIST-01` now requires a known autostart/persistence registry location, cutting bitsadmin from **66 → 15** conclusions. Residual over-firing: see #13.
+- **#5 — `/analyze` doesn't return parse diagnostics (Step 4)** — **FIXED.** `/analyze` now returns `AnalyzeResponse` = `{incident, diagnostics}` with `total_rows`, `skipped`, and a capped (50) `errors` list. ⚠️ But see **#11**: this response-shape change broke the frontend client.
+
 ## 🔴 CRITICAL
 
-### 2. `/upload` still rejects real `.json` datasets (Step 4) — PARTIALLY FIXED
+### 11. `/analyze` response contract changed — committed frontend client breaks (Step 4 / Steps 7–9) — NEW
 
-The dispatch fix made `POST /analyze` handle real `.json` datasets, but `POST /upload` (`main.py`) still whitelists only `.csv`/`.ndjson`, so uploading an actual Mordor dataset (all of which end in `.json`) still returns **400 "Only .csv or .ndjson files are accepted"**. The two endpoints now behave inconsistently on the same file: you can analyze a `.json` but cannot upload it.
+`f4ef633` changed `/analyze`'s response from the `Incident` directly to `{incident, diagnostics}`, but `incident-dashboard/src/api.ts` (`analyzeCsv`) still does `return (await res.json()) as Incident`. On a successful analysis the frontend now receives the wrapper object and treats it as an `Incident` — `incident.conclusions` is `undefined`, so `ResultView`'s `conclusions.reduce(...)` crashes. Verified against the committed frontend (commit `d918b70`): **any successful upload breaks the dashboard**. `getIncident` is unaffected (that endpoint still returns the raw `Incident`).
 
 ## 🟠 HIGH
 
-### 3. Graph edge explosion — pipeline can't scale to real logs (Step 2, amplified by Step 5) — NOW REACHABLE
+### 12. Test suite is red after the rule change (Step 5) — NEW
 
-`followed_by` (all in-window pairs) + `same_object` (cliques) produce combinatorial edges on dense real captures. Measured: **1,052 events → 1,105,652 edges**; **`run_analysis` on that dataset takes ~18 s and returns 769 spurious conclusions**; the 10,377-event `cmd_wevtutil…json` still effectively times out. Now that the dispatch fix wires real data through `run_analysis`, `/analyze` accepts a large dataset and then **hangs / floods conclusions** instead of failing fast — the new test only exercises the tiny bitsadmin file (89 events), so this is never caught. Already flagged as Phase 1 KNOWN-ISSUES #5, but only "at demo scale" — on real data this blocks the Step 2 end-to-end goal.
+`f4ef633` narrowed `REG-PERSIST-01` to persistence-relevant registry keys but did not update the existing rule tests. `tests/test_rules.py::test_reg_persist_window_boundary_is_inclusive` now fails because the fixture's registry target is a bare event id, not an autostart key — **1 failed, 75 passed**. The rule-behavior change needs its fixtures updated (e.g. a `HKLM\Software\Microsoft\Windows\CurrentVersion\Run\...` target) or the allowlist needs to stay test-compatible.
 
-### 4. New rules don't actually drive conclusions on real data (Step 5)
+### 9. Silent zero-event misdetection on extension-only routing (Step 4 / Step 1)
 
-- `C2-BEACON-01` (network) requires `metadata["reason"]` to contain `"c2"` — real Sysmon network events have no such field, so it **never fires on real data** (only on the hand-crafted CSV with a synthetic `reason=c2`). On the real bitsadmin dataset it produced **0** C2 conclusions.
-- `PERSIST-ESTABLISHED-01` needs PSH-STAGING first (PowerShell + file_download), which the chosen datasets don't trigger.
-- `REG-PERSIST-01` over-fires: **66 conclusions from 89 events** on the bitsadmin dataset (noise). Step 5's "done when" (network + log-deletion events actually drive conclusions on real data) is not met.
-
-### 9. Silent zero-event misdetection on extension-only routing (Step 4 / Step 1) — NEW
-
-`detect_format` routes purely by file extension (`.json`/`.ndjson` → `parse_mordor`) with no content validation, so any non-NDJSON file named `.json`/`.ndjson` is sent to `parse_mordor` and silently yields **0 events** instead of raising a clear error. Verified: a valid CSV renamed `attack_sample.json` parses to 0 events / 19 "malformed" and returns a successful-looking empty Incident. Because `/analyze` still doesn't return parse diagnostics (#5), the user sees "Analyzed 0 events, 0 conclusions" with no indication the wrong parser ran. The content-sniffing fallback only runs for unknown extensions, so it never catches this case.
+`detect_format` routes purely by file extension (`.json`/`.ndjson` → `parse_mordor`) with no content validation, so any non-NDJSON file named `.json`/`.ndjson` is sent to `parse_mordor` and silently yields **0 events** instead of raising a clear error. Verified: a valid CSV renamed `attack_sample.json` parses to 0 events / 19 "malformed" and returns a successful-looking empty Incident. Because `/analyze` returns an empty `errors` list for this case (nothing was "malformed" from the caller's view), the user sees "Analyzed 0 events, 0 conclusions" with no indication the wrong parser ran. The content-sniffing fallback only runs for unknown extensions, so it never catches this case.
 
 ## 🟡 MEDIUM
 
-### 5. `/analyze` doesn't return parse diagnostics (Step 4) — PARTIAL
+### 13. C2-BEACON-01 heuristic still over-fires on real data (Step 5) — NEW
 
-Step 4's checklist asked for skipped-rows/errors in the `/analyze` response; it still returns only the `Incident` (`response_model=Incident`). Partial progress: `Incident.summary` now includes the skipped-row count.
+The port-based heuristic (any outbound connection to a non-common port after a process execution) is loose. On the `cmd_wevtutil_modify_security_eventlog_path.json` dataset — whose only attack is a single `wevtutil` log clear — the pipeline still reports **9 `C2-BEACON-01` + 25 `REG-PERSIST-01` = 34 conclusions**, almost none of which reflect the dataset's actual action. `REG-PERSIST-01` likewise still produces **15 conclusions on the 89-event bitsadmin file**. The rules fire on real data now (improvement over #4) but are far from precise; Step 5's "network + log-deletion events actually drive conclusions" is met in quantity, not quality.
 
 ### 6. Missing `src/data/mordor/README.md` (Step 2)
 
@@ -113,11 +114,12 @@ Step 2's checklist and done-when require a README documenting the datasets + lic
 
 The roadmap says mordor data should be git-ignored (except `.gitkeep`); the team reversed that and committed the actual files, including a 48 MB `cmd_wevtutil_modify_security_eventlog_path.json`. Repo bloat + deviation (not a functional bug).
 
-### 10. Regression tests don't cover misdetection or scale (Step 4 / Step 2) — NEW
+### 10. Regression tests don't cover misdetection or scale (Step 4 / Step 2)
 
-`test_dispatch.py` only asserts happy-path routing on a known-good `.json` dataset and a missing-file error. There is no test for a mislabeled file (a CSV named `.json`, or a `.json` that isn't NDJSON) — so the silent zero-event path (#9) ships unguarded — and it only exercises the tiny bitsadmin dataset (89 events), so the scale/hang problem (#3) is never caught.
+`test_dispatch.py` only asserts happy-path routing on a known-good `.json` dataset and a missing-file error. There is no test for a mislabeled file (a CSV named `.json`, or a `.json` that isn't NDJSON) — so the silent zero-event path (#9) ships unguarded — and it only exercises the tiny bitsadmin dataset (89 events), so the scale problem (#3) and the new rule-noise regression (#13) are never caught. Additionally, no test asserts the new `AnalyzeResponse` shape, which is why #11 slipped through.
 
 ## Minor (setup / hygiene)
 
 - **venv under-provisioned (Steps 2–3):** `matplotlib`/`scipy` are in `requirements.txt` but missing from the venv, so tests fail to even collect until installed.
 - **Stale KNOWN-ISSUES header (chore):** the top of this file still describes Phase 1 "Steps 1–8" and the 🔴 critical section still claims the critical path is unimplemented, which is no longer true.
+- **Stale comment in `graph.py` (cosmetic):** the `followed_by` cap comment says "keep scanning (via `continue`, not `break` on the cap)" but the code uses `break` — behavior is correct either way, the comment is misleading.
