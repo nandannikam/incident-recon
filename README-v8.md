@@ -117,35 +117,7 @@ sequenceDiagram
 ```
 
 
----
 
-
-
----
-
-## 📸 Interactive Dashboard & Attack Chain Screenshots
-
-To demonstrate the visual trace-back and automated graph layouts of our React client, here are actual screenshots of the system in action:
-
-### 1. Unified SOC Analyst Console (`CONCLUSIONS` View)
-*Shows the high-level metrics (e.g., 18 events analyzed, 9 conclusions found) and expandable evidence trace-back cards containing raw process and host event fields.*
-
-![Unified SOC Analyst Console](z2.jpeg)
-
-### 2. React Flow Interactive Attack Timeline (`ATTACK CHAIN` View)
-*Visualizes how separate, seemingly isolated log indicators flow together left-to-right. Includes custom interactive controls and a mini-map for fast navigation of complex threat diagrams.*
-
-![React Flow Interactive Attack Timeline](z3.jpeg)
-
-### 3. Exploded Node Chaining & Dependencies
-*A detailed close-up of rule execution. Notice how intermediate findings (like `PSH-STAGING-01`) feed directly into advanced multi-stage conclusions (like `PERSIST-ESTABLISHED-01`) with animated, weighted relationship links.*
-
-![Exploded Node Chaining & Dependencies](z1.jpeg)
-
-### 4. Interactive Layout Tree
-*Demonstrates dynamic tree rendering using React Flow and Dagre to perfectly balance and clean complex, multi-level incident graphs without visual clutter.*
-
-![Interactive Layout Tree](z4.jpeg)
 
 ## 📐 Key Architectural & Graph Modeling Decisions
 
