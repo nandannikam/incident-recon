@@ -21,6 +21,21 @@ multi-line "Key: Value" blob (standard Sysmon format), e.g.:
 
 This module extracts that blob into a dict and merges it with the raw event
 fields into Event.metadata, so nothing is lost for downstream rule evidence.
+
+Phase 3 Step 5 (real campaign data, e.g. APT29 Day 1) changes:
+
+* Actor/target are looked up in the parsed Message blob AND in the event's own
+  top-level fields (Mordor/nxlog flattens many fields to the top level, e.g.
+  ``NewProcessName``, ``ScriptBlockText``). Windows 4688 and 4104 events keep
+  those values only at the top level, so before this change all of them ended
+  up with target ``UNKNOWN`` -- and since the graph links events that share a
+  target, every one of them would have been joined into a single false cluster.
+  Values parsed from the Message blob still win when both exist.
+* The raw ``Message`` text is no longer copied into ``Event.metadata`` by
+  default (it duplicates the fields parsed from it and roughly doubles the
+  memory of a 400 MB campaign). Pass ``keep_raw_message=True`` to keep it.
+  The original line is always recoverable from the event_id.
+* Progress is logged every ``_PROGRESS_EVERY`` lines for long files.
 """
 
 from __future__ import annotations
@@ -35,6 +50,9 @@ from app.models import Event, EventType
 from app.parser import ParseResult
 
 log = logging.getLogger("incident.mordor_parser")
+
+# Log a progress line every this many non-blank lines (large campaign files).
+_PROGRESS_EVERY = 100_000
 
 # ---------------------------------------------------------------------------
 # EventID -> EventType mapping (Sysmon + Windows Event Log)
@@ -147,7 +165,7 @@ def _normalize_timestamp(raw: Any) -> datetime:
     raise MordorParseError(f"unrecognized timestamp format: {text!r}")
 
 
-def _event_type_from_event_id(event_id: int, msg_fields: dict[str, str]) -> EventType:
+def _event_type_from_event_id(event_id: int, msg_fields: dict[str, Any]) -> EventType:
     """
     Map a Windows/Sysmon EventID to our EventType taxonomy.
 
@@ -174,26 +192,61 @@ def _event_type_from_event_id(event_id: int, msg_fields: dict[str, str]) -> Even
     return base_type
 
 
-def _extract_actor(raw: dict[str, Any], msg_fields: dict[str, str]) -> str:
+def _first_value(fields: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    """First non-empty value among ``keys`` as a stripped string, else None.
+
+    Values from top-level JSON fields can be ints/bools, but Event.actor and
+    Event.target must be strings, so everything is coerced here.
+    """
+    for key in keys:
+        value = fields.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _extract_actor(raw: dict[str, Any], fields: dict[str, Any]) -> str:
     """
     Best-effort extraction of the 'actor' (who/what performed the action).
-    Falls back through several common Sysmon/Windows fields, then to the
-    hostname, so `actor` is never empty.
+    ``fields`` is the merged lookup table (top-level fields overlaid with the
+    parsed Message blob). Falls back through several common Sysmon/Windows
+    fields, then to the hostname, so `actor` is never empty.
     """
-    for key in ("User", "SubjectUserName", "ParentImage", "ProcessId"):
-        value = msg_fields.get(key)
-        if value:
-            return value
+    actor = _first_value(fields, ("User", "SubjectUserName", "ParentImage", "ProcessId"))
+    if actor:
+        return actor
 
-    for key in ("Hostname", "SourceName"):
-        value = raw.get(key)
-        if value:
-            return str(value)
-
-    return "UNKNOWN"
+    return _first_value(raw, ("Hostname", "SourceName")) or "UNKNOWN"
 
 
-def _extract_target(event_type: EventType, msg_fields: dict[str, str]) -> str:
+_TARGET_PRIORITY_BY_TYPE: dict[EventType, tuple[str, ...]] = {
+    EventType.NETWORK_CONNECTION: ("DestinationIp", "DestinationHostname"),
+    EventType.REGISTRY_MODIFICATION: ("TargetObject",),
+    EventType.FILE_CREATION: ("TargetFilename", "Image"),
+    EventType.FILE_DOWNLOAD: ("TargetFilename", "Image"),
+    # Multi-part script blocks ("Creating Scriptblock text (1 of 7)") have no
+    # ScriptBlockText field: fall back to the block's id (shared by every part
+    # of the same script), then to the script file path.
+    EventType.POWERSHELL_EXECUTION: ("ScriptBlockText", "ScriptBlock ID", "Path"),
+    EventType.LOG_DELETION: ("Channel", "Image"),
+    EventType.PROCESS_EXECUTION: ("Image", "NewProcessName"),
+}
+
+_TARGET_FALLBACK_KEYS = (
+    "Image",
+    "TargetFilename",
+    "TargetObject",
+    "DestinationIp",
+    "DestinationHostname",
+    "ScriptBlockText",
+    "NewProcessName",
+)
+
+
+def _extract_target(event_type: EventType, fields: dict[str, Any]) -> str:
     """
     Best-effort extraction of the 'target' (object acted upon). The relevant
     field depends on the event type, so we look up a type-specific priority
@@ -201,42 +254,20 @@ def _extract_target(event_type: EventType, msg_fields: dict[str, str]) -> str:
     process that opened the socket, not the target -- the destination IP
     is the target).
     """
-    priority_by_type: dict[EventType, tuple[str, ...]] = {
-        EventType.NETWORK_CONNECTION: ("DestinationIp", "DestinationHostname"),
-        EventType.REGISTRY_MODIFICATION: ("TargetObject",),
-        EventType.FILE_CREATION: ("TargetFilename", "Image"),
-        EventType.FILE_DOWNLOAD: ("TargetFilename", "Image"),
-        EventType.POWERSHELL_EXECUTION: ("ScriptBlockText",),
-        EventType.LOG_DELETION: ("Channel", "Image"),
-        EventType.PROCESS_EXECUTION: ("Image", "NewProcessName"),
-    }
-
-    for key in priority_by_type.get(event_type, ()):
-        value = msg_fields.get(key)
-        if value:
-            return value
+    target = _first_value(fields, _TARGET_PRIORITY_BY_TYPE.get(event_type, ()))
+    if target:
+        return target
 
     # Fallback: try every known field regardless of type.
-    for key in (
-        "Image",
-        "TargetFilename",
-        "TargetObject",
-        "DestinationIp",
-        "DestinationHostname",
-        "ScriptBlockText",
-        "NewProcessName",
-    ):
-        value = msg_fields.get(key)
-        if value:
-            return value
-
-    return "UNKNOWN"
+    return _first_value(fields, _TARGET_FALLBACK_KEYS) or "UNKNOWN"
 
 
 def parse_mordor_line(
     line: str,
     line_no: int,
     file_label: str,
+    *,
+    keep_raw_message: bool = False,
 ) -> Event:
     """
     Parse a single NDJSON line into a validated Event.
@@ -256,15 +287,23 @@ def parse_mordor_line(
         raise MordorParseError(f"non-integer EventID: {raw.get('EventID')!r}") from exc
 
     msg_fields = _parse_sysmon_message(str(raw.get("Message", "")))
-    event_type = _event_type_from_event_id(event_id, msg_fields)
+
+    # One lookup table for actor/target extraction: the event's own top-level
+    # fields, overlaid with what was parsed out of the Message blob (the blob
+    # wins on conflict, as it always did). The raw Message text itself is left
+    # out -- see the module docstring.
+    fields: dict[str, Any] = {k: v for k, v in raw.items() if k != "Message"}
+    fields.update(msg_fields)
+    event_type = _event_type_from_event_id(event_id, fields)
 
     timestamp_raw = raw.get("TimeCreated") or raw.get("@timestamp")
     timestamp = _normalize_timestamp(timestamp_raw)
 
     source = str(raw.get("Hostname") or raw.get("SourceName") or "UNKNOWN_HOST")
 
-    metadata: dict[str, Any] = dict(raw)
-    metadata.update(msg_fields)  # parsed Message fields take precedence
+    metadata: dict[str, Any] = dict(fields)
+    if keep_raw_message and "Message" in raw:
+        metadata["Message"] = raw["Message"]
     metadata["_event_id"] = event_id  # keep the numeric EventID for rules/debugging
 
     return Event(
@@ -272,13 +311,13 @@ def parse_mordor_line(
         timestamp=timestamp,
         source=source,
         event_type=event_type,
-        actor=_extract_actor(raw, msg_fields),
-        target=_extract_target(event_type, msg_fields),
+        actor=_extract_actor(raw, fields),
+        target=_extract_target(event_type, fields),
         metadata=metadata,
     )
 
 
-def parse_mordor(file_path: str | Path) -> ParseResult:
+def parse_mordor(file_path: str | Path, *, keep_raw_message: bool = False) -> ParseResult:
     """
     Parse a Mordor NDJSON file into a ParseResult (events + diagnostics).
 
@@ -304,12 +343,21 @@ def parse_mordor(file_path: str | Path) -> ParseResult:
                 continue  # blank lines don't count as rows at all
             total_rows += 1
             try:
-                event = parse_mordor_line(stripped, line_no, file_label)
+                event = parse_mordor_line(
+                    stripped, line_no, file_label, keep_raw_message=keep_raw_message
+                )
                 events.append(event)
             except Exception as exc:  # noqa: BLE001 - intentional: any bad row is skip+count
                 skipped += 1
                 if len(errors) < 200:  # cap memory use on pathological files
                     errors.append(f"line {line_no}: {type(exc).__name__}: {exc}")
+            if total_rows % _PROGRESS_EVERY == 0:
+                log.info(
+                    "parse_mordor(%s): %d lines read, %d events kept so far",
+                    file_label,
+                    total_rows,
+                    len(events),
+                )
 
     events.sort(key=lambda e: e.timestamp)
 

@@ -345,3 +345,131 @@ def test_parse_mordor_metadata_preserves_raw_fields(tmp_path: Path):
     assert event.metadata["EventID"] == 1
     assert event.metadata["CommandLine"] == "cmd.exe /c whoami"
     assert event.metadata["ProcessId"] == "3060"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 Step 5 — real campaign data (top-level fields, raw Message handling)
+# ---------------------------------------------------------------------------
+
+
+def _win_4688_toplevel_only() -> dict:
+    """Shaped like a real APT29 4688: the Message blob is prose with tabbed,
+    multi-word keys; the useful values live in flattened top-level fields."""
+    return {
+        "SourceName": "Microsoft-Windows-Security-Auditing",
+        "Hostname": "SCRANTON.dmevals.local",
+        "@timestamp": "2020-05-02T02:55:57.748Z",
+        "EventID": 4688,
+        "Message": (
+            "A new process has been created.\r\n\r\nCreator Subject:\r\n"
+            "\tSecurity ID:\t\tS-1-5-21\r\n\tAccount Name:\t\tpbeesly\r\n"
+        ),
+        "NewProcessName": "C:\\Windows\\System32\\whoami.exe",
+        "SubjectUserName": "pbeesly",
+        "CommandLine": "whoami",
+    }
+
+
+def _win_4104_toplevel_only() -> dict:
+    return {
+        "SourceName": "Microsoft-Windows-PowerShell",
+        "Hostname": "SCRANTON.dmevals.local",
+        "@timestamp": "2020-05-02T02:56:16.968Z",
+        "EventID": 4104,
+        "Message": "Creating Scriptblock text (1 of 1):\r\nGet-Process\r\n\r\nScriptBlock ID: {1}",
+        "ScriptBlockText": "Get-Process",
+    }
+
+
+def test_4688_target_and_actor_come_from_top_level_fields() -> None:
+    event = parse_mordor_line(json.dumps(_win_4688_toplevel_only()), 0, "apt.json")
+
+    assert event.event_type == EventType.PROCESS_EXECUTION
+    assert event.target == "C:\\Windows\\System32\\whoami.exe"
+    assert event.actor == "pbeesly"
+
+
+def test_4104_target_comes_from_top_level_script_block_text() -> None:
+    event = parse_mordor_line(json.dumps(_win_4104_toplevel_only()), 0, "apt.json")
+
+    assert event.event_type == EventType.POWERSHELL_EXECUTION
+    assert event.target == "Get-Process"
+
+
+def test_values_parsed_from_the_message_blob_win_over_top_level_fields() -> None:
+    row = _sysmon_process_create()
+    row["Image"] = "C:\\top\\level.exe"  # conflicts with the blob's cmd.exe
+
+    event = parse_mordor_line(json.dumps(row), 0, "x.json")
+
+    assert event.target == "C:\\Windows\\System32\\cmd.exe"
+
+
+def test_non_string_top_level_values_are_coerced_not_rejected() -> None:
+    row = _win_4104_toplevel_only()
+    row["ProcessId"] = 3060  # an int at the top level, not in the blob
+
+    event = parse_mordor_line(json.dumps(row), 0, "x.json")
+
+    assert event.actor == "3060"
+
+
+def test_event_without_any_usable_field_still_gets_unknown_target() -> None:
+    row = _win_4104_toplevel_only()
+    del row["ScriptBlockText"]
+    row["Message"] = "nothing parseable here"
+
+    assert parse_mordor_line(json.dumps(row), 0, "x.json").target == "UNKNOWN"
+
+
+def test_raw_message_is_dropped_from_metadata_by_default() -> None:
+    event = parse_mordor_line(json.dumps(_sysmon_process_create()), 0, "x.json")
+
+    assert "Message" not in event.metadata
+    assert event.metadata["CommandLine"] == "cmd.exe /c whoami"  # parsed fields kept
+    assert event.metadata["Hostname"] == "HOST01.lab.local"  # top-level fields kept
+    assert event.metadata["_event_id"] == 1
+
+
+def test_raw_message_can_be_kept_on_request() -> None:
+    row = _sysmon_process_create()
+
+    event = parse_mordor_line(json.dumps(row), 0, "x.json", keep_raw_message=True)
+
+    assert event.metadata["Message"] == row["Message"]
+
+
+def test_parse_mordor_passes_keep_raw_message_through(tmp_path: Path) -> None:
+    path = _write_ndjson(tmp_path / "keep.ndjson", [_sysmon_process_create()])
+
+    assert "Message" not in parse_mordor(path).events[0].metadata
+    assert "Message" in parse_mordor(path, keep_raw_message=True).events[0].metadata
+
+
+def test_campaign_style_file_has_no_unknown_targets(tmp_path: Path) -> None:
+    path = _write_ndjson(
+        tmp_path / "campaign.ndjson",
+        [_win_4688_toplevel_only(), _win_4104_toplevel_only(), _sysmon_registry_set()],
+    )
+
+    result = parse_mordor(path)
+
+    assert result.skipped == 0
+    assert [e.target for e in result.events if e.target == "UNKNOWN"] == []
+
+
+def test_multipart_powershell_block_falls_back_to_scriptblock_id_then_path() -> None:
+    row = _win_4104_toplevel_only()
+    del row["ScriptBlockText"]  # real multi-part blocks have no such field
+    row["Message"] = (
+        "Creating Scriptblock text (1 of 7):\r\n#requires -version 3.0\r\n\r\n"
+        "ScriptBlock ID: {abc-123}\r\nPath: C:\\Modules\\Disk.psm1"
+    )
+    row["Path"] = "C:\\Modules\\Disk.psm1"
+
+    event = parse_mordor_line(json.dumps(row), 0, "x.json")
+    assert event.target == "{abc-123}"
+
+    del row["Message"]
+    event = parse_mordor_line(json.dumps(row | {"Message": "no fields"}), 1, "x.json")
+    assert event.target == "C:\\Modules\\Disk.psm1"
