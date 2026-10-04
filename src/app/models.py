@@ -11,11 +11,14 @@ source of truth for things like TIME_WINDOW_MINUTES.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from app.config import settings
 
 # ---------------------------------------------------------------------------
 # Provenance scheme (documented as a contract, not just implemented in
@@ -29,10 +32,11 @@ from pydantic import BaseModel, Field
 # Evidence.event_ids entry trace back to a real source line.
 # ---------------------------------------------------------------------------
 
-# Default time window used for both `followed_by` graph edges (Step 5) and
-# rule matching (Step 6). Defined once, here, so it can never drift between
-# the two consumers.
-TIME_WINDOW_MINUTES = 5
+# Time window used for both `followed_by` graph edges (Step 5) and rule
+# matching (Step 6). Defined once, here, so it can never drift between the
+# two consumers. The value comes from configuration (TIME_WINDOW_MINUTES env
+# var, default 5 -- see app/config.py), read once at import time.
+TIME_WINDOW_MINUTES = settings.time_window_minutes
 
 
 class EventType(str, Enum):
@@ -82,6 +86,78 @@ class Evidence(BaseModel):
     )
 
 
+class Severity(str, Enum):
+    """How serious a finding is, lowest to highest. ``INFO`` is only used for
+    an Incident that has no conclusions at all."""
+
+    INFO = "info"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+_SEVERITY_RANK: dict[Severity, int] = {
+    Severity.INFO: 0,
+    Severity.LOW: 1,
+    Severity.MEDIUM: 2,
+    Severity.HIGH: 3,
+    Severity.CRITICAL: 4,
+}
+
+# Severity is derived from the MITRE tactic a conclusion belongs to, so the UI
+# can rank findings without every rule having to restate it. Tactics not
+# listed here fall back to MEDIUM.
+TACTIC_SEVERITY: dict[str, Severity] = {
+    "Initial Access": Severity.MEDIUM,
+    "Execution": Severity.MEDIUM,
+    "Persistence": Severity.HIGH,
+    "Privilege Escalation": Severity.HIGH,
+    "Defense Evasion": Severity.HIGH,
+    "Credential Access": Severity.HIGH,
+    "Discovery": Severity.LOW,
+    "Lateral Movement": Severity.HIGH,
+    "Collection": Severity.MEDIUM,
+    "Command and Control": Severity.HIGH,
+    "Exfiltration": Severity.CRITICAL,
+    "Impact": Severity.CRITICAL,
+}
+DEFAULT_SEVERITY = Severity.MEDIUM
+
+# Confidence (0-1) used when a rule does not state one explicitly. A rule that
+# knows better simply passes ``confidence=...`` and this table is not consulted.
+#   LOG-CLEAR-01   : a log-clear event is unambiguous.
+#   C2-BEACON-01   : a non-standard-port heuristic -- weak evidence.
+#   PERSIST-ESTABLISHED-01 : two chained stages agree, so stronger than one.
+RULE_DEFAULT_CONFIDENCE: dict[str, float] = {
+    "LOG-CLEAR-01": 0.9,
+    "PERSIST-ESTABLISHED-01": 0.8,
+    "REG-PERSIST-01": 0.6,
+    "PSH-STAGING-01": 0.5,
+    "C2-BEACON-01": 0.3,
+}
+DEFAULT_CONFIDENCE = 0.5
+
+
+def severity_for_tactic(tactic: str) -> Severity:
+    """Severity implied by a MITRE tactic name (unknown tactics -> MEDIUM)."""
+    return TACTIC_SEVERITY.get(tactic, DEFAULT_SEVERITY)
+
+
+def max_severity(severities: Iterable[Severity]) -> Severity:
+    """The most serious of ``severities``; ``INFO`` when there are none."""
+    highest = Severity.INFO
+    for severity in severities:
+        if _SEVERITY_RANK[severity] > _SEVERITY_RANK[highest]:
+            highest = severity
+    return highest
+
+
+def _empty_str_list() -> list[str]:
+    """Helper for strictly typed Pydantic list factories."""
+    return []
+
+
 class Conclusion(BaseModel):
     conclusion_id: str
     rule_id: str
@@ -89,6 +165,25 @@ class Conclusion(BaseModel):
     tactic: str
     description: str
     evidence: list[Evidence]
+    # Optional on input, always filled after validation: a rule may state its
+    # own confidence/severity, otherwise they are derived (see the tables
+    # above). Giving them defaults also keeps incidents stored before these
+    # fields existed loadable.
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    severity: Severity | None = None
+    # Hosts (Event.source values) the evidence came from. The field is part of
+    # the contract now; the rules/engine step fills it (defaults to empty).
+    hosts: list[str] = Field(default_factory=_empty_str_list)
+
+    @model_validator(mode="after")
+    def _fill_derived_fields(self) -> Conclusion:
+        if self.confidence is None:
+            self.confidence = RULE_DEFAULT_CONFIDENCE.get(
+                self.rule_id, DEFAULT_CONFIDENCE
+            )
+        if self.severity is None:
+            self.severity = severity_for_tactic(self.tactic)
+        return self
 
 
 def _empty_conclusion_list() -> list[Conclusion]:
@@ -100,6 +195,17 @@ class Incident(BaseModel):
     id: str
     summary: str
     conclusions: list[Conclusion] = Field(default_factory=_empty_conclusion_list)
+    # The most serious conclusion's severity (INFO when there are none);
+    # derived automatically unless given explicitly.
+    severity: Severity | None = None
+
+    @model_validator(mode="after")
+    def _derive_severity(self) -> Incident:
+        if self.severity is None:
+            self.severity = max_severity(
+                c.severity for c in self.conclusions if c.severity is not None
+            )
+        return self
 
 
 class DemoRule(BaseModel):

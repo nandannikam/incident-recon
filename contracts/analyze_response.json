@@ -1,0 +1,31 @@
+{
+  "incident": {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "summary": "Analyzed 2 events (skipped 0 malformed rows), found 1 conclusions.",
+    "conclusions": [
+      {
+        "conclusion_id": "11111111111111111111111111111111",
+        "rule_id": "REG-PERSIST-01",
+        "technique_id": "T1547.001",
+        "tactic": "Persistence",
+        "description": "Possible registry-based persistence established: a process execution was followed by a modification to a known autostart registry location within the time window.",
+        "evidence": [
+          {
+            "event_ids": ["sample.csv:0", "sample.csv:1"],
+            "explanation": "Process USER01 executed (invoice.exe), then persistence-relevant registry key HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Updater was modified on HOST01 within 5 minutes.",
+            "parent_conclusion_id": null
+          }
+        ],
+        "confidence": 0.6,
+        "severity": "high",
+        "hosts": ["HOST01"]
+      }
+    ],
+    "severity": "high"
+  },
+  "diagnostics": {
+    "total_rows": 2,
+    "skipped": 0,
+    "errors": []
+  }
+}

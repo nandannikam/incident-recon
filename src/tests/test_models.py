@@ -10,6 +10,8 @@ from app.models import (
     EventType,
     Evidence,
     Incident,
+    Severity,
+    max_severity,
 )
 
 
@@ -107,3 +109,128 @@ def test_demo_rules_named_and_one_is_chained():
     chained = [r for r in DEMO_RULES if r.chained]
     assert len(chained) == 1
     assert chained[0].rule_id == "PERSIST-ESTABLISHED-01"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 Step 2/4 — confidence, severity, hosts
+# ---------------------------------------------------------------------------
+
+
+def _conclusion(**overrides):
+    values = {
+        "conclusion_id": "c-1",
+        "rule_id": "REG-PERSIST-01",
+        "technique_id": "T1547.001",
+        "tactic": "Persistence",
+        "description": "d",
+        "evidence": [Evidence(event_ids=["a:1"], explanation="e")],
+    }
+    values.update(overrides)
+    return Conclusion(**values)
+
+
+def test_confidence_defaults_come_from_the_rule_table():
+    assert _conclusion(rule_id="LOG-CLEAR-01").confidence == 0.9
+    assert _conclusion(rule_id="C2-BEACON-01").confidence == 0.3
+    assert _conclusion(rule_id="SOME-NEW-RULE").confidence == 0.5
+
+
+def test_explicit_confidence_wins_over_the_default():
+    assert _conclusion(rule_id="LOG-CLEAR-01", confidence=0.1).confidence == 0.1
+
+
+@pytest.mark.parametrize("bad", [-0.01, 1.01, 5])
+def test_confidence_outside_zero_to_one_is_rejected(bad):
+    with pytest.raises(ValidationError):
+        _conclusion(confidence=bad)
+
+
+def test_confidence_boundaries_are_accepted():
+    assert _conclusion(confidence=0.0).confidence == 0.0
+    assert _conclusion(confidence=1.0).confidence == 1.0
+
+
+@pytest.mark.parametrize(
+    "tactic, expected",
+    [
+        ("Persistence", Severity.HIGH),
+        ("Execution", Severity.MEDIUM),
+        ("Defense Evasion", Severity.HIGH),
+        ("Command and Control", Severity.HIGH),
+        ("Discovery", Severity.LOW),
+        ("Impact", Severity.CRITICAL),
+        ("A Tactic Nobody Listed", Severity.MEDIUM),
+    ],
+)
+def test_conclusion_severity_is_derived_from_tactic(tactic, expected):
+    assert _conclusion(tactic=tactic).severity == expected
+
+
+def test_explicit_severity_wins_over_the_derived_one():
+    assert _conclusion(severity=Severity.LOW).severity == Severity.LOW
+
+
+def test_unknown_severity_value_is_rejected():
+    with pytest.raises(ValidationError):
+        _conclusion(severity="catastrophic")
+
+
+def test_incident_severity_is_the_maximum_of_its_conclusions():
+    incident = Incident(
+        id="i",
+        summary="s",
+        conclusions=[
+            _conclusion(conclusion_id="a", tactic="Execution"),  # medium
+            _conclusion(conclusion_id="b", tactic="Persistence"),  # high
+            _conclusion(conclusion_id="c", tactic="Discovery"),  # low
+        ],
+    )
+    assert incident.severity == Severity.HIGH
+
+
+def test_incident_without_conclusions_has_info_severity():
+    assert Incident(id="i", summary="s").severity == Severity.INFO
+
+
+def test_max_severity_helper():
+    assert max_severity([]) == Severity.INFO
+    assert max_severity([Severity.LOW, Severity.CRITICAL, Severity.MEDIUM]) == (
+        Severity.CRITICAL
+    )
+
+
+def test_hosts_default_to_an_empty_list_that_is_not_shared():
+    first, second = _conclusion(), _conclusion()
+    first.hosts.append("HOST01")
+    assert second.hosts == []
+
+
+def test_incident_stored_before_these_fields_existed_still_loads():
+    """Old rows in incidents.db have no confidence/severity/hosts keys."""
+    legacy = (
+        '{"id": "old", "summary": "s", "conclusions": [{"conclusion_id": "c",'
+        ' "rule_id": "LOG-CLEAR-01", "technique_id": "T1070", "tactic":'
+        ' "Defense Evasion", "description": "d", "evidence": [{"event_ids":'
+        ' ["x:1"], "explanation": "e", "parent_conclusion_id": null}]}]}'
+    )
+    incident = Incident.model_validate_json(legacy)
+
+    assert incident.conclusions[0].confidence == 0.9
+    assert incident.conclusions[0].severity == Severity.HIGH
+    assert incident.conclusions[0].hosts == []
+    assert incident.severity == Severity.HIGH
+
+
+def test_new_fields_survive_a_json_round_trip():
+    incident = Incident(
+        id="i",
+        summary="s",
+        conclusions=[
+            _conclusion(confidence=0.42, severity=Severity.LOW, hosts=["H1", "H2"])
+        ],
+    )
+    restored = Incident.model_validate_json(incident.model_dump_json())
+
+    assert restored == incident
+    assert restored.conclusions[0].confidence == 0.42
+    assert restored.conclusions[0].hosts == ["H1", "H2"]

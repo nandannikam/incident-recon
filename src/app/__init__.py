@@ -5,9 +5,14 @@ Every entrypoint imports the `app` package before doing anything else
 (the CLI does via `python -m app.orchestrator`, FastAPI does via
 `uvicorn app.main:app`, pytest does via its normal test collection import),
 so configuring logging here guarantees it runs first and is never duplicated.
+
+Importing `app.config` here also means invalid configuration (see Settings)
+stops the process at start-up, before any request is served.
 """
 
 import logging
+
+from app.config import settings
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
@@ -17,7 +22,7 @@ def _configure_logging() -> None:
     if getattr(root, "_incident_configured", False):
         return  # idempotent: safe if `app` gets imported more than once
 
-    root.setLevel(logging.INFO)
+    root.setLevel(settings.log_level)
 
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(logging.Formatter(_LOG_FORMAT))

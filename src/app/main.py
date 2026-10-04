@@ -1,6 +1,9 @@
 """
 FastAPI thin wrapper (Step 10 / Phase 2 Step 4).
 
+Phase 3 Step 6: CORS origins and the upload size limit now come from
+``app.config.settings`` (env vars / .env) instead of being hardcoded.
+
 KNOWN-ISSUES Phase 2 fixes applied here:
 
   #2: POST /upload only accepted .csv/.ndjson, so every real Mordor dataset
@@ -35,6 +38,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from app.config import settings
 from app.dispatch import UnknownLogFormatError
 from app.models import Incident
 from app.orchestrator import run_analysis_with_diagnostics
@@ -44,13 +48,11 @@ app = FastAPI(title="Cybersecurity Incident Reconstruction API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 # .json is included alongside .ndjson because every real Mordor/OTRF
 # dataset ships with a .json extension despite being newline-delimited
@@ -79,6 +81,23 @@ class AnalyzeResponse(BaseModel):
 
     incident: Incident
     diagnostics: ParseDiagnostics
+
+
+def _human_size(num_bytes: int) -> str:
+    """'50 MB' for whole megabytes, otherwise a plain byte count."""
+    megabyte = 1024 * 1024
+    if num_bytes >= megabyte and num_bytes % megabyte == 0:
+        return f"{num_bytes // megabyte} MB"
+    return f"{num_bytes} bytes"
+
+
+def _check_size(contents: bytes) -> None:
+    """Reject uploads over the configured limit (MAX_UPLOAD_BYTES), read at
+    request time so a changed setting needs no code edit."""
+    if len(contents) > settings.max_upload_bytes:
+        raise HTTPException(
+            413, f"File too large (max {_human_size(settings.max_upload_bytes)})"
+        )
 
 
 def _require_filename(filename: str | None) -> str:
@@ -121,8 +140,7 @@ async def upload_endpoint(file: UploadFile = File(...)):
     _validate_extension(filename)
 
     contents = await file.read()
-    if len(contents) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "File too large (max 50 MB)")
+    _check_size(contents)
 
     file_id = uuid.uuid4().hex
     path = _save_upload(filename, contents)
@@ -136,8 +154,7 @@ async def analyze_endpoint(file: UploadFile = File(...)):
     _validate_extension(filename)
 
     contents = await file.read()
-    if len(contents) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "File too large (max 50 MB)")
+    _check_size(contents)
 
     path = _save_upload(filename, contents)
 
