@@ -27,6 +27,10 @@ is never sufficient to route to the Mordor parser):
        parse_mordor. Anything else raises UnknownLogFormatError
        immediately, rather than being silently misrouted.
 
+Phase 3 Step 4: after parsing, `parse_any_log` also adds canonical host / IP /
+hash keys (``_host_norm``, ``_ip_norm``, ``_hashes``) to every event's
+metadata via `app.normalize`, for cross-host correlation.
+
 This keeps `parser.py` and `mordor_parser.py` untouched (both already
 correct in isolation) and keeps `graph.py` untouched (it is not this
 module's file to own) by normalizing the pid/parentpid keys here, at the
@@ -40,6 +44,7 @@ import logging
 from pathlib import Path
 
 from app.mordor_parser import parse_mordor
+from app.normalize import normalize_events
 from app.parser import ParseResult, parse_log
 
 log = logging.getLogger("incident.dispatch")
@@ -156,7 +161,11 @@ def parse_any_log(file_path: str | Path) -> ParseResult:
     log.info("Detected format '%s' for %s", fmt, path)
 
     if fmt == "mordor":
-        result = parse_mordor(path)
-        return _normalize_pid_aliases(result)
+        result = _normalize_pid_aliases(parse_mordor(path))
+    else:
+        result = parse_log(str(path))
 
-    return parse_log(str(path))
+    # Canonical host / IP / hash forms for cross-host correlation (Phase 3
+    # Step 4). Adds underscore-prefixed metadata keys only; see normalize.py.
+    normalize_events(result.events)
+    return result
