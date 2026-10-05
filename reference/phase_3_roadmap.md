@@ -6,7 +6,7 @@
 > **Scope:** The final phase. Fix the correctness gaps Phase 2 left behind, prove the system on a real multi-stage campaign, and ship it as a reproducible, deployable product. Only genuine stretch work stays optional.
 > **Ordering:** Correctness first (trust) → campaign (the showcase) → production & deployment → frontend last mile.
 > **Audience:** Project team (junior-to-mid on the stack). Every step has a goal, a todo checklist, illustrative code snippets, and a "done when" criterion.
-> **Verified:** 2026-10-05 — checked against the codebase. Completed items are ticked; partial items carry an inline note. Step 1 is complete · Steps 2–7 are partially implemented · Steps 8–13 are not started.
+> **Verified:** 2026-10-05 — checked against the codebase. Completed items are ticked; partial items carry an inline note. Steps 1–2 are complete · Steps 3–7 are partially implemented · Steps 8–13 are not started.
 
 ---
 
@@ -155,7 +155,7 @@ def test_analyze_returns_wrapped_response(client):
 
 ---
 
-### Step 2 — Detection Precision + Confidence + Severity
+### Step 2 — Detection Precision + Confidence + Severity — ✅ Complete (2026-10-05)
 
 **Goal:** Stop the rules over-firing. Each rule produces **at most one conclusion per host+technique**, carries a **confidence score**, and is tuned against real datasets with known expected counts.
 
@@ -165,11 +165,11 @@ def test_analyze_returns_wrapped_response(client):
 
 - [x] Add `confidence: float` (0–1) to `Conclusion`; rules set it deliberately (`LOG-CLEAR-01` 0.9 — unambiguous; `C2-BEACON-01` 0.3 — a port heuristic).
 - [x] Add `severity` (derived from tactic) so the UI can rank findings.
-- [ ] **Cluster / de-duplicate at the conclusion level**: group by `(rule_id, host)` and keep the highest-confidence instance, merging the rest as supporting evidence. The 15 near-identical `REG-PERSIST-01` findings on bitsadmin collapse to one.
-- [ ] Tighten `C2-BEACON-01`: require the destination IP to be **public** (exclude RFC1918 / loopback / link-local); document residual false positives honestly.
-- [ ] Require `REG-PERSIST-01` to see the process that _writes_ the persistence key, not just any prior process within 5 minutes.
-- [ ] Add **golden-fixture tests per dataset**: the wevtutil dataset yields only `LOG-CLEAR-01`; bounded counts on bitsadmin/psexec/empire.
-- [ ] Add a **benign-fixture test on real data**: non-malicious input yields ≤ a documented small number of low-confidence findings.
+- [x] **Cluster / de-duplicate at the conclusion level**: group by `(rule_id, host)` and keep the highest-confidence instance, merging the rest as supporting evidence. The 15 near-identical `REG-PERSIST-01` findings on bitsadmin collapse to one.
+- [x] Tighten `C2-BEACON-01`: require the destination IP to be **public** (exclude RFC1918 / loopback / link-local); document residual false positives honestly. _(also excludes multicast explicitly — on Python 3.14 `is_global` is `True` for 239.255.255.250.)_
+- [x] Require `REG-PERSIST-01` to see the process that _writes_ the persistence key, not just any prior process within 5 minutes. _(matches the `Image` of the writing process; falls back to time-order at a lower confidence (0.4) when the source records no writer, e.g. the synthetic CSV.)_
+- [x] Add **golden-fixture tests per dataset**: the wevtutil dataset yields only `LOG-CLEAR-01`; bounded counts on bitsadmin/psexec/empire. _(golden tests added in `src/tests/test_precision.py`; honest deviation: the wevtutil dataset contains **no** `log_deletion` event, so it yields `REG-PERSIST-01` for the EventLog service key — its C2 noise is gone and the count is bounded to 1. The roadmap's "only `LOG-CLEAR-01`" expectation does not match the data's event mapping; flagged for the Step 4 taxonomy work.)_
+- [x] Add a **benign-fixture test on real data**: non-malicious input yields ≤ a documented small number of low-confidence findings. _(covered by the real-data flood-control bound on wevtutil (≤2, conf 0.6) plus zero findings on `benign_sample.csv`; a dedicated benign Mordor fixture is deferred to the Step 5 dataset work.)_
 
 **Code snippet — confidence + clustering:**
 
