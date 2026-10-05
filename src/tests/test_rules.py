@@ -7,11 +7,11 @@ from app.graph import build_graph
 from app.models import Conclusion, Event, EventType
 from app.rules.registry import (
     RULES,
+    detect_log_deletion,
+    detect_network_beacon,
     detect_persistence_established,
     detect_powershell_staging,
     detect_registry_persistence,
-    detect_network_beacon,
-    detect_log_deletion,
 )
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
@@ -121,18 +121,26 @@ def test_reg_persist_returns_none_outside_time_window() -> None:
 
 
 def test_reg_persist_window_boundary_is_inclusive() -> None:
-    proc = _event("p", "2024-01-01T10:00:00Z", event_type="process_execution")
+    # Matching writer images so this exercises the strongest (writer-matched)
+    # path while still testing the inclusive 5-minute boundary.
+    proc = _event(
+        "p",
+        "2024-01-01T10:00:00Z",
+        event_type="process_execution",
+        metadata={"Image": r"C:\Windows\System32\Updater.EXE"},
+    )
     reg = _event(
         "r",
         "2024-01-01T10:05:00Z",
         event_type="registry_modification",  # exactly 5 min
         target=AUTOSTART_KEY,
+        metadata={"Image": r"c:\windows\system32\updater.exe"},
     )
 
-    assert (
-        detect_registry_persistence([proc, reg], build_graph([proc, reg]), [])
-        is not None
-    )
+    conclusion = detect_registry_persistence([proc, reg], build_graph([proc, reg]), [])
+
+    assert conclusion is not None
+    assert conclusion.confidence == 0.6
 
 
 def test_reg_persist_ignores_non_autostart_key() -> None:
@@ -287,3 +295,163 @@ def test_all_rules_return_none_on_benign_neighborhood() -> None:
     assert detect_registry_persistence(benign, graph, []) is None
     assert detect_powershell_staging(benign, graph, []) is None
     assert detect_persistence_established(benign, graph, []) is None
+
+
+# ---------------------------------------------------------------------------
+# REG-PERSIST-01 — writer identity (Phase 3 Step 2)
+# ---------------------------------------------------------------------------
+
+WRITER = r"C:\Windows\System32\evil.exe"
+
+
+def test_reg_persist_writer_image_match_fires() -> None:
+    proc = _event(
+        "p",
+        "2024-01-01T10:00:00Z",
+        event_type="process_execution",
+        target="launcher.exe",
+        metadata={"Image": r"C:\Windows\System32\Evil.exe"},
+    )
+    reg = _event(
+        "r",
+        "2024-01-01T10:01:00Z",
+        event_type="registry_modification",
+        target=AUTOSTART_KEY,
+        metadata={"Image": WRITER},
+    )
+
+    conclusion = detect_registry_persistence([proc, reg], build_graph([proc, reg]), [])
+
+    assert conclusion is not None
+    assert conclusion.rule_id == "REG-PERSIST-01"
+    assert conclusion.confidence == 0.6
+    assert conclusion.evidence[0].event_ids == [proc.event_id, reg.event_id]
+
+
+def test_reg_persist_writer_image_without_matching_process_does_not_fire() -> None:
+    proc = _event(
+        "p",
+        "2024-01-01T10:00:00Z",
+        event_type="process_execution",
+        target="good.exe",
+        metadata={"Image": r"C:\Windows\System32\good.exe"},
+    )
+    reg = _event(
+        "r",
+        "2024-01-01T10:01:00Z",
+        event_type="registry_modification",
+        target=AUTOSTART_KEY,
+        metadata={"Image": WRITER},
+    )
+
+    assert (
+        detect_registry_persistence([proc, reg], build_graph([proc, reg]), []) is None
+    )
+
+
+def test_reg_persist_without_writer_image_falls_back() -> None:
+    # The synthetic CSV records no Image, so the old any-prior-process
+    # fallback must still fire -- at the lower confidence.
+    proc = _event("p", "2024-01-01T10:00:00Z", event_type="process_execution")
+    reg = _event(
+        "r",
+        "2024-01-01T10:01:00Z",
+        event_type="registry_modification",
+        target=AUTOSTART_KEY,
+    )
+
+    conclusion = detect_registry_persistence([proc, reg], build_graph([proc, reg]), [])
+
+    assert conclusion is not None
+    assert conclusion.confidence == 0.4
+    assert conclusion.evidence[0].event_ids == [proc.event_id, reg.event_id]
+
+
+def test_reg_persist_non_autostart_key_with_writer_still_does_not_fire() -> None:
+    proc = _event(
+        "p",
+        "2024-01-01T10:00:00Z",
+        event_type="process_execution",
+        metadata={"Image": WRITER},
+    )
+    reg = _event(
+        "r",
+        "2024-01-01T10:01:00Z",
+        event_type="registry_modification",
+        target=NON_AUTOSTART_KEY,
+        metadata={"Image": WRITER},
+    )
+
+    assert (
+        detect_registry_persistence([proc, reg], build_graph([proc, reg]), []) is None
+    )
+
+
+# ---------------------------------------------------------------------------
+# C2-BEACON-01 — public destination requirement (Phase 3 Step 2)
+# ---------------------------------------------------------------------------
+
+
+def _beacon_events(ip: str, port: int, *, metadata_extra: dict | None = None):
+    proc = _event(
+        "p", "2024-01-01T10:00:00Z", event_type="process_execution", target="evil.exe"
+    )
+    metadata = {"DestinationPort": port}
+    metadata.update(metadata_extra or {})
+    net = _event(
+        "n",
+        "2024-01-01T10:01:00Z",
+        event_type="network_connection",
+        target=ip,
+        metadata=metadata,
+    )
+    return proc, net
+
+
+def test_network_beacon_fires_on_public_destination_nonstandard_port() -> None:
+    proc, net = _beacon_events("185.220.101.1", 4444)
+
+    conclusion = detect_network_beacon([proc, net], build_graph([proc, net]), [])
+
+    assert conclusion is not None
+    assert conclusion.rule_id == "C2-BEACON-01"
+    assert conclusion.confidence == 0.3
+
+
+def test_network_beacon_does_not_fire_on_private_destination() -> None:
+    # RFC1918 destination on a non-standard port: cannot confirm public -> no fire.
+    proc, net = _beacon_events("10.0.0.5", 4444)
+
+    assert detect_network_beacon([proc, net], build_graph([proc, net]), []) is None
+
+
+def test_network_beacon_does_not_fire_on_multicast_destination() -> None:
+    # 239.255.255.250 is SSDP multicast; on this Python ``is_global`` alone
+    # still returns True, so the rule must exclude multicast explicitly.
+    proc, net = _beacon_events("239.255.255.250", 1900)
+
+    assert detect_network_beacon([proc, net], build_graph([proc, net]), []) is None
+
+
+def test_network_beacon_does_not_fire_on_benign_port() -> None:
+    proc, net = _beacon_events("185.220.101.1", 443)
+
+    assert detect_network_beacon([proc, net], build_graph([proc, net]), []) is None
+
+
+def test_network_beacon_uses_normalized_ip_when_destination_ip_absent() -> None:
+    # No DestinationIp field: fall back to the parser's _ip_norm.
+    proc = _event(
+        "p", "2024-01-01T10:00:00Z", event_type="process_execution", target="evil.exe"
+    )
+    net = _event(
+        "n",
+        "2024-01-01T10:01:00Z",
+        event_type="network_connection",
+        target="not-an-ip",
+        metadata={"_ip_norm": "185.220.101.1", "DestinationPort": 4444},
+    )
+
+    conclusion = detect_network_beacon([proc, net], build_graph([proc, net]), [])
+
+    assert conclusion is not None

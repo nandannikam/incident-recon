@@ -13,31 +13,34 @@ KNOWN-ISSUES Phase 2 #4 fixes applied here:
     contain "c2" -- a synthetic field that only ever existed in the
     hand-crafted attack_sample.csv. No real Sysmon/Mordor network event
     carries a "reason" field, so this rule fired 0 times on any real
-    dataset. It now inspects real Sysmon EventID 3 fields
-    (DestinationPort, DestinationIsIpv6, Initiated, plus the destination
-    IP itself) with a documented, conservative heuristic: a non-standard
-    destination port combined with a private-process-to-public-IP
-    connection. This is intentionally conservative -- it is a heuristic,
-    not a definitive C2 detector, and is documented as such below.
+    dataset. It now inspects real Sysmon EventID 3 fields with a
+    documented, conservative heuristic: a non-benign destination port AND
+    a destination IP that is public (not RFC1918 / loopback / link-local /
+    multicast / reserved). This is intentionally conservative -- it is a
+    heuristic, not a definitive C2 detector, and is documented as such
+    below.
 
   - detect_registry_persistence previously fired on ANY
     process_execution + registry_modification pair within the window,
     with no check on which registry key was touched. On a real dataset
     (bitsadmin, 89 events) this produced 66 conclusions -- almost every
     process/registry pair in the file, which is noise, not signal. It now
-    requires the registry key to match a known autostart/persistence
-    location (Run/RunOnce keys, Winlogon Shell/Userinit, services,
-    scheduled-task-adjacent keys). This is the standard T1547.001
-    persistence-location allowlist, not an arbitrary filter.
+    requires both (a) the registry key to match a known autostart /
+    persistence location and (b) the process to be the one that actually
+    wrote the key (Sysmon 13 "Image"), when the source records it. The
+    synthetic CSV records no writer, so that case falls back to the old
+    any-prior-process behaviour at a lower confidence.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 import uuid
 from collections.abc import Callable
 from datetime import timedelta
+from typing import Any
 
 import networkx as nx
 
@@ -68,6 +71,41 @@ def _same_host(a: Event, b: Event) -> bool:
 
 def _prior_conclusions(facts: list[Conclusion], rule_id: str) -> list[Conclusion]:
     return [c for c in facts if c.rule_id == rule_id]
+
+
+def _normalize_image(value: Any) -> str | None:
+    """Canonical process-image identity: strip surrounding quotes, lower-case.
+
+    Real sources disagree on quoting and case (``"C:\\Windows\\cmd.exe"`` vs
+    ``c:\\windows\\CMD.EXE``); the normalized form is what writer/process
+    comparison uses. Empty values give None.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    while len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    return text.lower() or None
+
+
+def _image_from_metadata(event: Event) -> str | None:
+    for key in ("Image", "NewProcessName", "New Process Name"):
+        image = _normalize_image(event.metadata.get(key))
+        if image is not None:
+            return image
+    return None
+
+
+def _writer_image(reg: Event) -> str | None:
+    """The process that wrote a registry key, or None when the source does
+    not record it (e.g. the hand-crafted CSV, which carries only a value)."""
+    return _image_from_metadata(reg)
+
+
+def _process_image(proc: Event) -> str | None:
+    """The image of a process_execution; falls back to ``target`` because the
+    parser sets that to Image/NewProcessName when Sysmon omits one."""
+    return _image_from_metadata(proc) or _normalize_image(proc.target)
 
 
 def _events_for_ids(
@@ -120,12 +158,14 @@ def detect_registry_persistence(
     graph: nx.DiGraph,
     facts: list[Conclusion],  # unused here — uniform rule signature
 ) -> Conclusion | None:
-    """REG-PERSIST-01 (T1547.001): process_execution then registry_modification
-    of a known autostart/persistence key, on the same host, within the window.
+    """REG-PERSIST-01 (T1547.001): the process that WRITES an autostart key,
+    shortly after it executes, on the same host within the window.
 
-    Narrowed (KNOWN-ISSUES #4) to require the registry target to match a
-    real persistence-relevant location, instead of firing on any
-    process+registry pair regardless of which key was touched.
+    Two guards keep this honest: the registry target must be a real
+    persistence location (KNOWN-ISSUES #4), and when the source records the
+    writing process (Sysmon 13 ``Image``), only that process matches. If the
+    source records no writer (the synthetic CSV), it falls back to any prior
+    process at a lower confidence.
     """
     proc_execs = [
         e for e in neighborhood if e.event_type == EventType.PROCESS_EXECUTION
@@ -136,35 +176,51 @@ def detect_registry_persistence(
         if e.event_type == EventType.REGISTRY_MODIFICATION
         and _is_persistence_registry_key(e.target)
     ]
-    for proc in proc_execs:
-        for reg in reg_mods:
-            if (
-                _same_host(proc, reg)
-                and proc.timestamp <= reg.timestamp
-                and _within_window(proc, reg)
-            ):
-                return Conclusion(
-                    conclusion_id=uuid.uuid4().hex,
-                    rule_id="REG-PERSIST-01",
-                    technique_id="T1547.001",
-                    tactic="Persistence",
-                    description=(
-                        "Possible registry-based persistence established: a process "
-                        "execution was followed by a modification to a known "
-                        "autostart registry location within the time window."
+    for reg in reg_mods:
+        candidates = [
+            proc
+            for proc in proc_execs
+            if _same_host(proc, reg)
+            and proc.timestamp <= reg.timestamp
+            and _within_window(proc, reg)
+        ]
+        if not candidates:
+            continue
+
+        writer = _writer_image(reg)
+        if writer is not None:
+            matched = [proc for proc in candidates if _process_image(proc) == writer]
+            if not matched:
+                continue  # writer recorded but no executing process matches it
+            proc = matched[0]
+            confidence = 0.6
+        else:
+            proc = candidates[0]
+            confidence = 0.4  # no writer recorded: weaker, fall back to time order
+
+        return Conclusion(
+            conclusion_id=uuid.uuid4().hex,
+            rule_id="REG-PERSIST-01",
+            technique_id="T1547.001",
+            tactic="Persistence",
+            confidence=confidence,
+            description=(
+                "Possible registry-based persistence established: a process "
+                "execution was followed by a modification to a known "
+                "autostart registry location within the time window."
+            ),
+            evidence=[
+                Evidence(
+                    event_ids=[proc.event_id, reg.event_id],
+                    explanation=(
+                        f"Process {proc.actor} executed ({proc.target}), then "
+                        f"persistence-relevant registry key {reg.target} was "
+                        f"modified on {proc.source} within "
+                        f"{TIME_WINDOW_MINUTES} minutes."
                     ),
-                    evidence=[
-                        Evidence(
-                            event_ids=[proc.event_id, reg.event_id],
-                            explanation=(
-                                f"Process {proc.actor} executed ({proc.target}), then "
-                                f"persistence-relevant registry key {reg.target} was "
-                                f"modified on {proc.source} within "
-                                f"{TIME_WINDOW_MINUTES} minutes."
-                            ),
-                        )
-                    ],
                 )
+            ],
+        )
     return None
 
 
@@ -259,22 +315,22 @@ def detect_persistence_established(
 
 
 # ---------------------------------------------------------------------------
-# C2-BEACON-01 — real-field heuristic (fixes #4)
+# C2-BEACON-01 — real-field heuristic (fixes #4, tightened in Phase 3 Step 2)
 #
 # Replaces the synthetic metadata["reason"] == "c2" check (which never
 # existed in real Sysmon data) with a heuristic over actual Sysmon
 # EventID 3 (Network connection) fields:
 #
-#   - DestinationPort is NOT a well-known service port (80/443/53/etc.) --
-#     C2 frameworks frequently use high/non-standard ports.
-#   - DestinationIsIpv6 / Initiated fields are read defensively (Sysmon
-#     always sets Initiated, but we don't assume every dataset does).
+#   - DestinationPort is present and NOT a well-known service port
+#     (80/443/53/etc.) -- C2 frameworks frequently use high/non-standard ports.
+#   - The destination IP is PUBLIC. Private, loopback, link-local, multicast
+#     and reserved destinations are everyday LAN/mDNS/SSDP noise, not command
+#     and control, so they no longer fire.
 #
-# This is a heuristic, not ground truth: plenty of legitimate software
-# uses non-standard ports, and this WILL both over- and under-fire on
-# real traffic. It's documented as a starting point per the roadmap's
-# Step 6 timebox guidance ("3-5 rules, one page each"), not a production
-# detection rule.
+# Residual false positives remain by design: a genuinely public host on a
+# non-standard port can still be legitimate traffic. This is a heuristic, not
+# ground truth, and is documented as such per the roadmap's Step 6 timebox
+# guidance ("3-5 rules, one page each"), not a production detection rule.
 # ---------------------------------------------------------------------------
 _COMMON_BENIGN_PORTS = {
     20,
@@ -306,9 +362,33 @@ _COMMON_BENIGN_PORTS = {
 }
 
 
+def _destination_ip_is_public(event: Event) -> bool:
+    """True only when the destination parses and is a global unicast address.
+
+    Conservative: anything unparseable, or private / loopback / link-local /
+    multicast / reserved / unspecified, is not public, so the caller cannot
+    confirm C2 and does not fire.
+
+    ``is_global`` alone is not enough on this project's Python: it still
+    returns True for multicast ranges such as 239.255.255.250, so
+    ``is_multicast`` is checked explicitly.
+    """
+    raw = (
+        event.metadata.get("DestinationIp")
+        or event.metadata.get("_ip_norm")
+        or event.target
+    )
+    try:
+        address = ipaddress.ip_address(str(raw).strip())
+    except ValueError:
+        return False
+    return address.is_global and not address.is_multicast
+
+
 def _looks_like_c2_connection(event: Event) -> bool:
-    """Heuristic: a network_connection whose destination port is present,
-    numeric, and NOT a well-known service port. See module docstring."""
+    """Heuristic: a network_connection to a PUBLIC destination on a port that
+    is present, numeric, and NOT a well-known service port. See module
+    docstring."""
     port_raw = event.metadata.get("DestinationPort") or event.metadata.get("dport")
     if port_raw is None:
         return False
@@ -316,7 +396,9 @@ def _looks_like_c2_connection(event: Event) -> bool:
         port = int(port_raw)
     except (TypeError, ValueError):
         return False
-    return port not in _COMMON_BENIGN_PORTS
+    if port in _COMMON_BENIGN_PORTS:
+        return False
+    return _destination_ip_is_public(event)
 
 
 def detect_network_beacon(
@@ -325,8 +407,8 @@ def detect_network_beacon(
     facts: list[Conclusion],  # unused here — uniform rule signature
 ) -> Conclusion | None:
     """C2-BEACON-01 (T1071): process_execution then network_connection on
-    the same host within the window, where the connection's destination
-    port looks non-standard (see _looks_like_c2_connection heuristic).
+    the same host within the window, where the connection goes to a public
+    destination on a non-standard port (see _looks_like_c2_connection).
     """
     proc_execs = [
         e for e in neighborhood if e.event_type == EventType.PROCESS_EXECUTION
@@ -350,17 +432,17 @@ def detect_network_beacon(
                     tactic="Command and Control",
                     description=(
                         "Possible C2 beacon: a process execution was followed by an "
-                        "outbound network connection to a non-standard port within "
-                        "the time window."
+                        "outbound network connection to a public destination on a "
+                        "non-standard port within the time window."
                     ),
                     evidence=[
                         Evidence(
                             event_ids=[proc.event_id, net.event_id],
                             explanation=(
                                 f"Process {proc.actor} executed ({proc.target}) on "
-                                f"{proc.source}, then connected to {net.target} "
-                                f"(non-standard destination port) within "
-                                f"{TIME_WINDOW_MINUTES} minutes."
+                                f"{proc.source}, then connected to public "
+                                f"{net.target} on a non-standard destination port "
+                                f"within {TIME_WINDOW_MINUTES} minutes."
                             ),
                         )
                     ],
