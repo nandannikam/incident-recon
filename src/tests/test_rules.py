@@ -16,6 +16,11 @@ from app.rules.registry import (
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 
+# A real T1547.001 autostart location, so REG-PERSIST-01 tests that target
+# time/host/order logic are not accidentally failing the key allowlist.
+AUTOSTART_KEY = r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run\Updater"
+NON_AUTOSTART_KEY = r"HKLM\Software\SomeApp\Settings"
+
 
 def _event(
     event_id: str,
@@ -88,7 +93,12 @@ def test_reg_persist_fires_on_attack_neighborhood() -> None:
 
 
 def test_reg_persist_requires_execution_before_modification() -> None:
-    reg = _event("r", "2024-01-01T10:01:00Z", event_type="registry_modification")
+    reg = _event(
+        "r",
+        "2024-01-01T10:01:00Z",
+        event_type="registry_modification",
+        target=AUTOSTART_KEY,
+    )
     proc = _event("p", "2024-01-01T10:02:00Z", event_type="process_execution")
 
     assert (
@@ -102,6 +112,7 @@ def test_reg_persist_returns_none_outside_time_window() -> None:
         "r",
         "2024-01-01T10:06:00Z",
         event_type="registry_modification",  # 6 min later
+        target=AUTOSTART_KEY,
     )
 
     assert (
@@ -115,6 +126,7 @@ def test_reg_persist_window_boundary_is_inclusive() -> None:
         "r",
         "2024-01-01T10:05:00Z",
         event_type="registry_modification",  # exactly 5 min
+        target=AUTOSTART_KEY,
     )
 
     assert (
@@ -123,12 +135,30 @@ def test_reg_persist_window_boundary_is_inclusive() -> None:
     )
 
 
+def test_reg_persist_ignores_non_autostart_key() -> None:
+    proc = _event("p", "2024-01-01T10:00:00Z", event_type="process_execution")
+    reg = _event(
+        "r",
+        "2024-01-01T10:01:00Z",
+        event_type="registry_modification",
+        target=NON_AUTOSTART_KEY,  # inside the window, but not an autostart key
+    )
+
+    assert (
+        detect_registry_persistence([proc, reg], build_graph([proc, reg]), []) is None
+    )
+
+
 def test_reg_persist_requires_same_host() -> None:
     proc = _event(
         "p", "2024-01-01T10:00:00Z", event_type="process_execution", source="HOST01"
     )
     reg = _event(
-        "r", "2024-01-01T10:01:00Z", event_type="registry_modification", source="HOST02"
+        "r",
+        "2024-01-01T10:01:00Z",
+        event_type="registry_modification",
+        source="HOST02",
+        target=AUTOSTART_KEY,
     )
 
     assert (

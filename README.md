@@ -303,6 +303,8 @@ This tests:
 - Graph edge generation rules [42].
 - Chaining-rule triggers (positive testing) and benign background suppression (negative testing) [42].
 
+Last verified green: **217 passed, 7 skipped** (2026-10-05) using the project `.venv`.
+
 ---
 
 ## 🚧 Project Boundaries & Explicitly Deferred Features

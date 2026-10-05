@@ -1,6 +1,6 @@
-# KNOWN ISSUES — Phase 1 (Steps 1–8)
+# KNOWN ISSUES — Phase 1 (Steps 1–8) — HISTORICAL / RESOLVED
 
-Scope: remaining open issues for the current scope — **Steps 1–8** (per `reference/phase_1_roadmap.md` §2.5 "Current Status"). Steps 9–11 are bonus/skip. All Step 1–4 defects that have been fixed are removed from this file; only what still matters is listed below, ordered by importance.
+Scope: this first section is retained for history. The Phase 1 critical path (Steps 5–8) has since been implemented and every Phase 1 defect below is resolved; only the Phase 2 section that follows lists anything still open. Per-item resolutions are annotated inline.
 
 > ## ⚠️ Setup — every team member must run this ONCE
 >
@@ -16,22 +16,17 @@ Scope: remaining open issues for the current scope — **Steps 1–8** (per `ref
 
 ## 🔴 CRITICAL
 
-### 1. Steps 5–8 — the entire critical path is unimplemented
+### 1. Steps 5–8 — the entire critical path is unimplemented — **FIXED**
 
-The must-do work from §2.5 is still empty. The Step 8 demo cannot run until all four exist:
-
-- `src/app/graph.py` — `build_graph(events) -> nx.DiGraph` (nodes + `followed_by`/`spawned`/`same_object` edges).
-- `src/app/rules/registry.py` — 3 rule functions: `REG-PERSIST-01`, `PSH-STAGING-01`, chained `PERSIST-ESTABLISHED-01` (intents are already named in `models.py`).
-- `src/app/engine.py` — `analyze(graph, rules)` forward-chaining loop with dedup + max-iteration cap.
-- `src/app/orchestrator.py` — `run_analysis(file_path)` + the `python -m app.orchestrator …` CLI entrypoint.
+**FIXED:** all four modules now exist and drive the pipeline end-to-end — `src/app/graph.py` (`build_graph` with `followed_by`/`spawned`/`same_object` edges), `src/app/rules/registry.py` (5 MITRE-mapped rules incl. the chained `PERSIST-ESTABLISHED-01`), `src/app/engine.py` (forward-chaining loop with dedup + iteration cap), and `src/app/orchestrator.py` (`run_analysis` + CLI). Retained for history.
 
 ## 🟠 HIGH
 
-### 2. `requirements.txt` is still an uncurated `pip freeze` dump with bleeding-edge pins
+### 2. `requirements.txt` is still an uncurated `pip freeze` dump with bleeding-edge pins — **PARTIALLY FIXED**
 
 - It lists transitive dependencies and pins `pandas==3.0.5`, `fastapi==0.141.1`, `starlette==1.6.0`, on a Python 3.14 venv — far ahead of the roadmap's "Python 3.11+, stable pandas 2.x" assumptions.
 - pandas 3.x has breaking behaviour vs the 2.x line the templates assume; a teammate on 3.11/3.12 may not reproduce this environment.
-- `uvicorn` and `python-multipart` are missing from **both** `requirements.txt` and `pyproject.toml` — only needed if the bonus Step 10 (FastAPI) is attempted.
+- ~~`uvicorn` and `python-multipart` are missing from **both** `requirements.txt` and `pyproject.toml`.~~ **FIXED:** both are now present in `requirements.txt`. The uncurated-freeze / bleeding-edge-pin concern remains open.
 
 **Fix:** curate `requirements.txt` to direct dependencies only, pin to a stable pandas 2.x line, and (only if doing Step 10) add `uvicorn[standard]` and `python-multipart`.
 
@@ -86,17 +81,23 @@ Found via an independent audit of the Phase 2 backend (see `reference/phase_2_ro
 
 ## 🔴 CRITICAL
 
-### 11. `/analyze` response contract changed — committed frontend client breaks (Step 4 / Steps 7–9) — NEW
+### 11. `/analyze` response contract changed — committed frontend client breaks (Step 4 / Steps 7–9) — **FIXED**
+
+**FIXED:** `incident-dashboard/src/api.ts` now unwraps `{incident, diagnostics}`, and the shape is guarded by `contracts/analyze_response.json` plus the backend and frontend contract tests. Historical description follows.
 
 `f4ef633` changed `/analyze`'s response from the `Incident` directly to `{incident, diagnostics}`, but `incident-dashboard/src/api.ts` (`analyzeCsv`) still does `return (await res.json()) as Incident`. On a successful analysis the frontend now receives the wrapper object and treats it as an `Incident` — `incident.conclusions` is `undefined`, so `ResultView`'s `conclusions.reduce(...)` crashes. Verified against the committed frontend (commit `d918b70`): **any successful upload breaks the dashboard**. `getIncident` is unaffected (that endpoint still returns the raw `Incident`).
 
 ## 🟠 HIGH
 
-### 12. Test suite is red after the rule change (Step 5) — NEW
+### 12. Test suite is red after the rule change (Step 5) — **FIXED**
+
+**FIXED (2026-10-05):** the `REG-PERSIST-01` fixtures now target a real autostart key so the boundary/order/host tests isolate their own logic, plus a new negative test for a non-autostart key. Suite is green: **217 passed, 7 skipped**. Historical description follows.
 
 `f4ef633` narrowed `REG-PERSIST-01` to persistence-relevant registry keys but did not update the existing rule tests. `tests/test_rules.py::test_reg_persist_window_boundary_is_inclusive` now fails because the fixture's registry target is a bare event id, not an autostart key — **1 failed, 75 passed**. The rule-behavior change needs its fixtures updated (e.g. a `HKLM\Software\Microsoft\Windows\CurrentVersion\Run\...` target) or the allowlist needs to stay test-compatible.
 
-### 9. Silent zero-event misdetection on extension-only routing (Step 4 / Step 1)
+### 9. Silent zero-event misdetection on extension-only routing (Step 4 / Step 1) — **FIXED**
+
+**FIXED:** content-sniffing now rejects a mislabeled file with a clear 422 instead of a silent 0-event success, guarded by `test_api_contract.py` and `test_dispatch.py`. Historical description follows.
 
 `detect_format` routes purely by file extension (`.json`/`.ndjson` → `parse_mordor`) with no content validation, so any non-NDJSON file named `.json`/`.ndjson` is sent to `parse_mordor` and silently yields **0 events** instead of raising a clear error. Verified: a valid CSV renamed `attack_sample.json` parses to 0 events / 19 "malformed" and returns a successful-looking empty Incident. Because `/analyze` returns an empty `errors` list for this case (nothing was "malformed" from the caller's view), the user sees "Analyzed 0 events, 0 conclusions" with no indication the wrong parser ran. The content-sniffing fallback only runs for unknown extensions, so it never catches this case.
 
@@ -106,20 +107,22 @@ Found via an independent audit of the Phase 2 backend (see `reference/phase_2_ro
 
 The port-based heuristic (any outbound connection to a non-common port after a process execution) is loose. On the `cmd_wevtutil_modify_security_eventlog_path.json` dataset — whose only attack is a single `wevtutil` log clear — the pipeline still reports **9 `C2-BEACON-01` + 25 `REG-PERSIST-01` = 34 conclusions**, almost none of which reflect the dataset's actual action. `REG-PERSIST-01` likewise still produces **15 conclusions on the 89-event bitsadmin file**. The rules fire on real data now (improvement over #4) but are far from precise; Step 5's "network + log-deletion events actually drive conclusions" is met in quantity, not quality.
 
-### 6. Missing `src/data/mordor/README.md` (Step 2)
+### 6. Missing `src/data/mordor/README.md` (Step 2) — **FIXED**
 
-Step 2's checklist and done-when require a README documenting the datasets + license (MIT). The directory has data but no README.
+**FIXED:** `src/data/mordor/README.md` now documents every dataset, its mapped event types, and the MIT / OTRF citation.
 
 ### 7. ~48 MB of real datasets committed to git (Step 2)
 
 The roadmap says mordor data should be git-ignored (except `.gitkeep`); the team reversed that and committed the actual files, including a 48 MB `cmd_wevtutil_modify_security_eventlog_path.json`. Repo bloat + deviation (not a functional bug).
 
-### 10. Regression tests don't cover misdetection or scale (Step 4 / Step 2)
+### 10. Regression tests don't cover misdetection or scale (Step 4 / Step 2) — **PARTIALLY FIXED**
+
+**PARTIALLY FIXED:** the mislabeled-file (422) path and the `AnalyzeResponse` shape are now guarded by `test_api_contract.py` plus the shared contract fixture; scale/performance remains unguarded. Historical description follows.
 
 `test_dispatch.py` only asserts happy-path routing on a known-good `.json` dataset and a missing-file error. There is no test for a mislabeled file (a CSV named `.json`, or a `.json` that isn't NDJSON) — so the silent zero-event path (#9) ships unguarded — and it only exercises the tiny bitsadmin dataset (89 events), so the scale problem (#3) and the new rule-noise regression (#13) are never caught. Additionally, no test asserts the new `AnalyzeResponse` shape, which is why #11 slipped through.
 
 ## Minor (setup / hygiene)
 
-- **venv under-provisioned (Steps 2–3):** `matplotlib`/`scipy` are in `requirements.txt` but missing from the venv, so tests fail to even collect until installed.
-- **Stale KNOWN-ISSUES header (chore):** the top of this file still describes Phase 1 "Steps 1–8" and the 🔴 critical section still claims the critical path is unimplemented, which is no longer true.
+- **venv under-provisioned (Steps 2–3):** **FIXED** — the project `.venv` now has the full `requirements.txt` installed (`pydantic-settings` included), so the suite collects and runs.
+- **Stale KNOWN-ISSUES header (chore):** **FIXED** — the Phase 1 header is now marked historical/resolved and the critical-path section is annotated as fixed.
 - **Stale comment in `graph.py` (cosmetic):** the `followed_by` cap comment says "keep scanning (via `continue`, not `break` on the cap)" but the code uses `break` — behavior is correct either way, the comment is misleading.
