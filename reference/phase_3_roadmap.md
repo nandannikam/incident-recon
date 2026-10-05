@@ -6,6 +6,7 @@
 > **Scope:** The final phase. Fix the correctness gaps Phase 2 left behind, prove the system on a real multi-stage campaign, and ship it as a reproducible, deployable product. Only genuine stretch work stays optional.
 > **Ordering:** Correctness first (trust) → campaign (the showcase) → production & deployment → frontend last mile.
 > **Audience:** Project team (junior-to-mid on the stack). Every step has a goal, a todo checklist, illustrative code snippets, and a "done when" criterion.
+> **Verified:** 2026-10-05 — checked against the codebase. Completed items are ticked; partial items carry an inline note. Step 1 is complete · Steps 2–7 are partially implemented · Steps 8–13 are not started.
 
 ---
 
@@ -124,18 +125,18 @@ Phase 3 is the final phase, and it is where the deferred work belongs. It has fo
 
 ---
 
-### Step 1 — Green the Suite + Lock the API Contract
+### Step 1 — Green the Suite + Lock the API Contract — ✅ Complete (2026-10-05)
 
 **Goal:** A fully green suite that also guards the contracts Phase 2 changed, so the next contract change can't ship silently (this is exactly how the frontend broke in Phase 2).
 
 **Todo checklist:**
 
-- [ ] Fix `test_rules.py::test_reg_persist_window_boundary_is_inclusive` — update the fixture's registry target to a real autostart key (`HKLM\Software\Microsoft\Windows\CurrentVersion\Run\...`) so the narrowed rule matches.
-- [ ] Add a test asserting `/analyze` returns `AnalyzeResponse` = `{incident, diagnostics}` (not the bare `Incident`) — the shape that broke the client in Phase 2.
-- [ ] Add a test for the mislabeled-file path: a CSV renamed `.json` must error clearly (422), **not** silently produce a 0-event success.
-- [ ] Add a shared contract fixture consumed by both the backend test and the frontend, so the two sides can't drift.
-- [ ] Update `KNOWN-ISSUES.md`: fix the stale header, mark resolved issues resolved.
-- [ ] Run `pytest -v`; record the green count in the README.
+- [x] Fix `test_rules.py::test_reg_persist_window_boundary_is_inclusive` — update the fixture's registry target to a real autostart key (`HKLM\Software\Microsoft\Windows\CurrentVersion\Run\...`) so the narrowed rule matches.
+- [x] Add a test asserting `/analyze` returns `AnalyzeResponse` = `{incident, diagnostics}` (not the bare `Incident`) — the shape that broke the client in Phase 2.
+- [x] Add a test for the mislabeled-file path: a CSV renamed `.json` must error clearly (422), **not** silently produce a 0-event success.
+- [x] Add a shared contract fixture consumed by both the backend test and the frontend, so the two sides can't drift. _(`contracts/analyze_response.json`, consumed by the backend `test_api_contract.py` and by `incident-dashboard/src/contract.test.ts` via Vitest.)_
+- [x] Update `KNOWN-ISSUES.md`: fix the stale header, mark resolved issues resolved.
+- [x] Run `pytest -v`; record the green count in the README. _(green: **217 passed, 7 skipped**; recorded in `README.md`.)_
 
 **Code snippet — contract guard:**
 
@@ -162,8 +163,8 @@ def test_analyze_returns_wrapped_response(client):
 
 **Todo checklist:**
 
-- [ ] Add `confidence: float` (0–1) to `Conclusion`; rules set it deliberately (`LOG-CLEAR-01` 0.9 — unambiguous; `C2-BEACON-01` 0.3 — a port heuristic).
-- [ ] Add `severity` (derived from tactic) so the UI can rank findings.
+- [x] Add `confidence: float` (0–1) to `Conclusion`; rules set it deliberately (`LOG-CLEAR-01` 0.9 — unambiguous; `C2-BEACON-01` 0.3 — a port heuristic).
+- [x] Add `severity` (derived from tactic) so the UI can rank findings.
 - [ ] **Cluster / de-duplicate at the conclusion level**: group by `(rule_id, host)` and keep the highest-confidence instance, merging the rest as supporting evidence. The 15 near-identical `REG-PERSIST-01` findings on bitsadmin collapse to one.
 - [ ] Tighten `C2-BEACON-01`: require the destination IP to be **public** (exclude RFC1918 / loopback / link-local); document residual false positives honestly.
 - [ ] Require `REG-PERSIST-01` to see the process that _writes_ the persistence key, not just any prior process within 5 minutes.
@@ -200,9 +201,9 @@ def cluster_conclusions(conclusions: list[Conclusion]) -> list[Conclusion]:
 
 - [ ] Replace the flat `MAX_EDGES_PER_NODE_PER_KIND = 50` cap with **relevance-ordered capping**: always keep `spawned` and `same_object` (high-signal), cap the dense `followed_by` by proximity.
 - [ ] Pre-index candidate events by `(event_type, source)` (and by target for `same_object`) so rules don't scan full neighbourhoods.
-- [ ] Add a **profiling test** with a synthetic 10k-event file; assert a wall-clock budget (target **< 5 s**) and a bounded edge count.
+- [ ] Add a **profiling test** with a synthetic 10k-event file; assert a wall-clock budget (target **< 5 s**) and a bounded edge count. _(partial: a 10k smoke test exists but its budget is 120 s and no edge count is asserted.)_
 - [ ] Add a request-level guard: above a parsed-event threshold, run analysis as a background task and return a job id (ties into Step 8).
-- [ ] Confirm golden fixtures still pass after the change.
+- [ ] Confirm golden fixtures still pass after the change. _(no per-dataset golden fixtures exist.)_
 
 **Code snippet — relevance-ordered edges:**
 
@@ -229,8 +230,8 @@ def build_graph(events: list[Event]) -> nx.DiGraph:
 
 - [ ] Allow correlation **across hosts** via shared concrete objects (same file hash / registry key / destination IP) or a network connection between hosts. Today every rule gates on `_same_host`, so campaigns never chain.
 - [ ] Build a correlation layer that groups conclusions into one incident by shared actor/object/time, then orders them by **kill-chain tactic**.
-- [ ] Add `severity` to `Incident` (max of its conclusions); generate the narrative `summary`.
-- [ ] Surface `confidence` and `severity` in the API response and the dashboard (badge/colour).
+- [ ] Add `severity` to `Incident` (max of its conclusions); generate the narrative `summary`. _(partial: `Incident.severity` derives the max; the narrative `summary` is still a count string.)_
+- [ ] Surface `confidence` and `severity` in the API response and the dashboard (badge/colour). _(partial: present in the API model; the dashboard does not render them.)_
 - [ ] Add a test: a synthetic multi-host campaign produces **one** incident with the expected kill-chain ordering.
 
 **Code snippet — kill-chain narrative:**
@@ -264,9 +265,9 @@ def build_summary(conclusions: list[Conclusion]) -> str:
 **Todo checklist:**
 
 - [ ] Add `scripts/fetch_datasets.sh` (or `make data`) downloading a compound campaign (recommended: **Mordor APT29 Day 1**, or the largest that fits the laptop) into a **git-ignored** directory.
-- [ ] Add `src/data/mordor/README.md` documenting every dataset, its mapped event types, and the **MIT license / OTRF citation** (Phase 2 requirement).
+- [x] Add `src/data/mordor/README.md` documenting every dataset, its mapped event types, and the **MIT license / OTRF citation** (Phase 2 requirement).
 - [ ] Stop tracking the ~48 MB of raw datasets: `.gitignore` them, keep small fixtures + download instructions (a CI size guard in Step 10 prevents regression).
-- [ ] Wire the campaign through `run_analysis`; verify chained conclusions fire across stages/hosts (depends on Step 4).
+- [ ] Wire the campaign through `run_analysis`; verify chained conclusions fire across stages/hosts (depends on Step 4). _(partial: generic entry works, but cross-host chaining is not implemented — the dataset README notes the chained rules do not fire on the campaign.)_
 - [ ] Save the demo output as an artifact (`docs/demo/campaign_result.json`).
 - [ ] Add a golden test asserting the campaign's expected techniques appear in the reconstructed incident.
 
@@ -293,11 +294,11 @@ echo "Downloaded campaign data to $DEST (git-ignored)"
 
 **Todo checklist:**
 
-- [ ] Add `pydantic-settings`; create `app/config.py` with a `Settings` class.
-- [ ] Externalise: CORS origins, max upload bytes, `TIME_WINDOW_MINUTES`, database URL, temp dir, API key, log level, and the frontend API base URL.
-- [ ] Add a committed `.env.example` (never commit `.env`); fail fast with a clear error if required values are missing in production.
-- [ ] Replace hardcoded literals in `main.py`, `storage.py`, `models.py`, and `api.ts` with settings lookups.
-- [ ] Add a test overriding a setting via env var (e.g. a smaller max upload) and assert behaviour changes.
+- [x] Add `pydantic-settings`; create `app/config.py` with a `Settings` class.
+- [ ] Externalise: CORS origins, max upload bytes, `TIME_WINDOW_MINUTES`, database URL, temp dir, API key, log level, and the frontend API base URL. _(partial: all externalised except the temp dir, still hardcoded in `main.py`.)_
+- [x] Add a committed `.env.example` (never commit `.env`); fail fast with a clear error if required values are missing in production.
+- [ ] Replace hardcoded literals in `main.py`, `storage.py`, `models.py`, and `api.ts` with settings lookups. _(partial: `storage.py` still hardcodes `DB_PATH` and ignores `settings.database_url`.)_
+- [x] Add a test overriding a setting via env var (e.g. a smaller max upload) and assert behaviour changes.
 
 **Code snippet:**
 
@@ -334,7 +335,7 @@ settings = Settings()
 - [ ] Configure via `DATABASE_URL`: Postgres in production, SQLite in dev/tests (same interface).
 - [ ] Add **Alembic** migrations; commit the initial migration.
 - [ ] Add `GET /incidents` (paginated) — powers frontend history in Step 12.
-- [ ] Keep existing `get_incident`/`save_incident` behaviour so nothing breaks.
+- [x] Keep existing `get_incident`/`save_incident` behaviour so nothing breaks.
 - [ ] Test against both backends (SQLite in CI; Postgres via a service container in Step 10).
 
 **Code snippet — repository boundary:**
@@ -395,7 +396,7 @@ async def analyze_endpoint(...): ...
 - [ ] `docker-compose.yml`: `api`, `db` (Postgres), `web`; health checks; named volume for Postgres; `.env` wiring.
 - [ ] A `Makefile` (`make up`, `make test`, `make data`, `make demo`) so nobody memorises long commands.
 - [ ] Verify the stack works from a clean checkout with _only_ Docker installed.
-- [ ] Keep the local non-Docker dev path working (SQLite fallback).
+- [x] Keep the local non-Docker dev path working (SQLite fallback).
 
 **Code snippet:**
 
@@ -471,7 +472,7 @@ jobs:
 
 **Todo checklist:**
 
-- [ ] Build the frontend (`vite build`) and serve `dist/` from FastAPI `StaticFiles` (simplest) or nginx in Compose.
+- [ ] Build the frontend (`vite build`) and serve `dist/` from FastAPI `StaticFiles` (simplest) or nginx in Compose. _(partial: `dist/` builds locally, but nothing serves it.)_
 - [ ] Deploy the stack (container host / university VM / managed Postgres + app host). Document the exact steps in `DEPLOY.md`.
 - [ ] Set production env vars and secrets out-of-band; never bake the API key into the image.
 - [ ] Add a deploy smoke test: health check + one real upload → incident.
@@ -499,9 +500,9 @@ app.mount("/", StaticFiles(directory="incident-dashboard/dist", html=True), name
 - [ ] Add React Router: `/` (upload) → `/incident/:id` (result); keep the Conclusions ⇄ Attack Chain tab toggle.
 - [ ] After a successful upload, `navigate('/incident/' + incident.id)` instead of only holding state.
 - [ ] On `/incident/:id`, load from the API so a shared URL works in a fresh browser.
-- [ ] Add a 404/empty state for an unknown incident.
+- [ ] Add a 404/empty state for an unknown incident. _(partial: `api.ts` parses a 404 into an error, but nothing renders an unknown-incident state.)_
 - [ ] (Optional) Incident **history** page backed by `GET /incidents` (Step 7).
-- [ ] Introduce a light data layer (React Query or a small custom hook) for caching/retry; keep `api.ts`'s 413/422/401 error parsing.
+- [ ] Introduce a light data layer (React Query or a small custom hook) for caching/retry; keep `api.ts`'s 413/422/401 error parsing. _(partial: existing 413/422/404 parsing retained; no data layer and no explicit 401 branch.)_
 
 **Code snippet:**
 
