@@ -37,7 +37,7 @@ export default function App() {
       <footer className="app-footer">
         <div className="container app-footer-inner">
           <span className="micro-caps">
-            Chaintrace · Incident Reconstruction Console
+            IncidentRecon · Incident Reconstruction Console
           </span>
           <span className="micro-caps mono">API · {API_HOST}</span>
         </div>

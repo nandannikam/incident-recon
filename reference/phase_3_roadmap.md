@@ -6,7 +6,7 @@
 > **Scope:** The final phase. Fix the correctness gaps Phase 2 left behind, prove the system on a real multi-stage campaign, and ship it as a reproducible, deployable product. Only genuine stretch work stays optional.
 > **Ordering:** Correctness first (trust) → campaign (the showcase) → production & deployment → frontend last mile.
 > **Audience:** Project team (junior-to-mid on the stack). Every step has a goal, a todo checklist, illustrative code snippets, and a "done when" criterion.
-> **Verified:** 2026-10-05 — checked against the codebase. Completed items are ticked; partial items carry an inline note. Steps 1–2 are complete · Steps 3–7 are partially implemented · Steps 8–13 are not started.
+> **Verified:** 2026-10-06 — checked against the codebase (HEAD `beb3492`). Completed items are ticked; partial items carry an inline note. Steps 1, 2, 4 and 6 are complete · Steps 3 and 5 are mostly complete · Steps 7–13 are partial or not started.
 
 ---
 
@@ -193,17 +193,17 @@ def cluster_conclusions(conclusions: list[Conclusion]) -> list[Conclusion]:
 
 ---
 
-### Step 3 — Scale & Performance Pass
+### Step 3 — Scale & Performance Pass — ◑ Mostly complete (2026-10-06)
 
 **Goal:** Make `/analyze` fast and memory-bounded on the campaign, without arbitrary edge caps that silently drop real evidence.
 
 **Todo checklist:**
 
-- [ ] Replace the flat `MAX_EDGES_PER_NODE_PER_KIND = 50` cap with **relevance-ordered capping**: always keep `spawned` and `same_object` (high-signal), cap the dense `followed_by` by proximity.
-- [ ] Pre-index candidate events by `(event_type, source)` (and by target for `same_object`) so rules don't scan full neighbourhoods.
-- [ ] Add a **profiling test** with a synthetic 10k-event file; assert a wall-clock budget (target **< 5 s**) and a bounded edge count. _(partial: a 10k smoke test exists but its budget is 120 s and no edge count is asserted.)_
-- [ ] Add a request-level guard: above a parsed-event threshold, run analysis as a background task and return a job id (ties into Step 8).
-- [ ] Confirm golden fixtures still pass after the change. _(no per-dataset golden fixtures exist.)_
+- [x] Replace the flat `MAX_EDGES_PER_NODE_PER_KIND = 50` cap with **relevance-ordered capping**: always keep `spawned` and `same_object` (high-signal), cap the dense `followed_by` by proximity. _(separate budgets: `followed_by` = 15 nearest successors, `same_object` = 50; `spawned` never capped.)_
+- [ ] Pre-index candidate events by `(event_type, source)` (and by target for `same_object`) so rules don't scan full neighbourhoods. _(partial: `_GraphIndex` builds `by_type_source`/`by_target` and materialized neighbourhoods once, but the rules still filter the full `neighbourhood` list — the index is built yet not consumed by rules.)_
+- [x] Add a **profiling test** with a synthetic 10k-event file; assert a wall-clock budget (target **< 5 s**) and a bounded edge count. _(green: measured 4.82 s graph+engine; edge bound asserted (`MAX_EDGES_PER_NODE_BOUND = 35`/node) in `test_synthetic.py`.)_
+- [x] Add a request-level guard: above a parsed-event threshold, run analysis as a background task and return a job id (ties into Step 8). _(configurable `background_analysis_threshold`; `POST /analyze` → 202 + job id, `GET /jobs/{id}`; tests in `test_jobs.py`.)_
+- [x] Confirm golden fixtures still pass after the change. _(per-dataset golden tests pass in `test_precision.py`; the wevtutil case skips when its dataset is not downloaded.)_
 
 **Code snippet — relevance-ordered edges:**
 
@@ -222,17 +222,17 @@ def build_graph(events: list[Event]) -> nx.DiGraph:
 
 ---
 
-### Step 4 — Cross-Host Correlation + Incident Narrative
+### Step 4 — Cross-Host Correlation + Incident Narrative — ✅ Complete (2026-10-06)
 
 **Goal:** Reconstruct the _incident story_, not a bag of per-host facts — and generate the readable summary the project summary draft promises ("Initial Access: … Execution: … Persistence: …").
 
 **Todo checklist:**
 
-- [ ] Allow correlation **across hosts** via shared concrete objects (same file hash / registry key / destination IP) or a network connection between hosts. Today every rule gates on `_same_host`, so campaigns never chain.
-- [ ] Build a correlation layer that groups conclusions into one incident by shared actor/object/time, then orders them by **kill-chain tactic**.
-- [ ] Add `severity` to `Incident` (max of its conclusions); generate the narrative `summary`. _(partial: `Incident.severity` derives the max; the narrative `summary` is still a count string.)_
-- [ ] Surface `confidence` and `severity` in the API response and the dashboard (badge/colour). _(partial: present in the API model; the dashboard does not render them.)_
-- [ ] Add a test: a synthetic multi-host campaign produces **one** incident with the expected kill-chain ordering.
+- [x] Allow correlation **across hosts** via shared concrete objects (same file hash / registry key / destination IP) or a network connection between hosts. Today every rule gates on `_same_host`, so campaigns never chain. _(`find_cross_host_links` in `src/app/correlation.py`.)_
+- [x] Build a correlation layer that groups conclusions into one incident by shared actor/object/time, then orders them by **kill-chain tactic**. _(`KILL_CHAIN_ORDER` + `order_by_kill_chain`; wired in `orchestrator.py`. Grouping is per shared concrete object.)_
+- [x] Add `severity` to `Incident` (max of its conclusions); generate the narrative `summary`. _(`build_summary` in `correlation.py`; `Incident.severity` = max of conclusions.)_
+- [x] Surface `confidence` and `severity` in the API response and the dashboard (badge/colour). _(dashboard renders severity + confidence badges in `IncidentView.tsx`.)_
+- [x] Add a test: a synthetic multi-host campaign produces **one** incident with the expected kill-chain ordering. _(`test_correlation.py::test_multi_host_campaign_is_ordered_and_linked`.)_
 
 **Code snippet — kill-chain narrative:**
 
@@ -258,18 +258,18 @@ def build_summary(conclusions: list[Conclusion]) -> str:
 
 ---
 
-### Step 5 — Multi-Stage Campaign + Data Hygiene
+### Step 5 — Multi-Stage Campaign + Data Hygiene — ◑ Mostly complete (2026-10-06)
 
 **Goal:** Prove the system reconstructs a **complete real attack campaign**, and stop committing 48 MB of raw data to git.
 
 **Todo checklist:**
 
-- [ ] Add `scripts/fetch_datasets.sh` (or `make data`) downloading a compound campaign (recommended: **Mordor APT29 Day 1**, or the largest that fits the laptop) into a **git-ignored** directory.
+- [x] Add `scripts/fetch_datasets.sh` (or `make data`) downloading a compound campaign (recommended: **Mordor APT29 Day 1**, or the largest that fits the laptop) into a **git-ignored** directory.
 - [x] Add `src/data/mordor/README.md` documenting every dataset, its mapped event types, and the **MIT license / OTRF citation** (Phase 2 requirement).
-- [ ] Stop tracking the ~48 MB of raw datasets: `.gitignore` them, keep small fixtures + download instructions (a CI size guard in Step 10 prevents regression).
-- [ ] Wire the campaign through `run_analysis`; verify chained conclusions fire across stages/hosts (depends on Step 4). _(partial: generic entry works, but cross-host chaining is not implemented — the dataset README notes the chained rules do not fire on the campaign.)_
-- [ ] Save the demo output as an artifact (`docs/demo/campaign_result.json`).
-- [ ] Add a golden test asserting the campaign's expected techniques appear in the reconstructed incident.
+- [x] Stop tracking the ~48 MB of raw datasets: `.gitignore` them, keep small fixtures + download instructions (a CI size guard in Step 10 prevents regression). _(47 MB wevtutil + APT29 untracked and git-ignored; a 13 MB psexec dataset is still tracked — the Step 10 size guard is intended to sweep that up.)_
+- [ ] Wire the campaign through `run_analysis`; verify chained conclusions fire across stages/hosts (depends on Step 4). _(partial: the campaign now reconstructs a single 4-host incident with cross-host links, but the forward-chained rules (PSH-STAGING → PERSIST-ESTABLISHED) do not fire on APT29 Day 1 — documented in the dataset README.)_
+- [x] Save the demo output as an artifact (`docs/demo/campaign_result.json`).
+- [x] Add a golden test asserting the campaign's expected techniques appear in the reconstructed incident. _(`test_campaign_golden.py`; skips when the artifact/dataset is absent.)_
 
 **Code snippet — dataset fetch:**
 
@@ -288,16 +288,16 @@ echo "Downloaded campaign data to $DEST (git-ignored)"
 
 ---
 
-### Step 6 — Configuration Management
+### Step 6 — Configuration Management — ✅ Complete (2026-10-06)
 
 **Goal:** One source of truth for every environment-specific value, so the same code runs locally, in CI and in deployment.
 
 **Todo checklist:**
 
 - [x] Add `pydantic-settings`; create `app/config.py` with a `Settings` class.
-- [ ] Externalise: CORS origins, max upload bytes, `TIME_WINDOW_MINUTES`, database URL, temp dir, API key, log level, and the frontend API base URL. _(partial: all externalised except the temp dir, still hardcoded in `main.py`.)_
+- [x] Externalise: CORS origins, max upload bytes, `TIME_WINDOW_MINUTES`, database URL, temp dir, API key, log level, and the frontend API base URL. _(temp dir now via `settings.upload_dir`.)_
 - [x] Add a committed `.env.example` (never commit `.env`); fail fast with a clear error if required values are missing in production.
-- [ ] Replace hardcoded literals in `main.py`, `storage.py`, `models.py`, and `api.ts` with settings lookups. _(partial: `storage.py` still hardcodes `DB_PATH` and ignores `settings.database_url`.)_
+- [x] Replace hardcoded literals in `main.py`, `storage.py`, `models.py`, and `api.ts` with settings lookups. _(`storage.py` now reads `settings.database_url`.)_
 - [x] Add a test overriding a setting via env var (e.g. a smaller max upload) and assert behaviour changes.
 
 **Code snippet:**
@@ -365,7 +365,7 @@ class IncidentRepository:
 - [ ] Add basic rate limiting (per-IP cap) on analysis endpoints.
 - [ ] Add structured JSON logging with a request id; log parse diagnostics at request level.
 - [ ] Reject **empty files** explicitly with a clear 400.
-- [ ] Support background analysis for large files with `GET /jobs/{id}` (ties into Step 3).
+- [x] Support background analysis for large files with `GET /jobs/{id}` (ties into Step 3). _(implemented as part of Step 3.)_
 - [ ] Document the API with examples; add a `curl` smoke-test script.
 
 **Code snippet:**
@@ -394,7 +394,7 @@ async def analyze_endpoint(...): ...
 - [ ] Multi-stage `Dockerfile` for the backend (Python slim, non-root user, pinned deps).
 - [ ] `Dockerfile` for the frontend (Node build → static output served by nginx **or** mounted into FastAPI StaticFiles — see Step 11).
 - [ ] `docker-compose.yml`: `api`, `db` (Postgres), `web`; health checks; named volume for Postgres; `.env` wiring.
-- [ ] A `Makefile` (`make up`, `make test`, `make data`, `make demo`) so nobody memorises long commands.
+- [ ] A `Makefile` (`make up`, `make test`, `make data`, `make demo`) so nobody memorises long commands. _(partial: `test`/`data`/`demo` exist; no `up` target yet.)_
 - [ ] Verify the stack works from a clean checkout with _only_ Docker installed.
 - [x] Keep the local non-Docker dev path working (SQLite fallback).
 
@@ -476,7 +476,7 @@ jobs:
 - [ ] Deploy the stack (container host / university VM / managed Postgres + app host). Document the exact steps in `DEPLOY.md`.
 - [ ] Set production env vars and secrets out-of-band; never bake the API key into the image.
 - [ ] Add a deploy smoke test: health check + one real upload → incident.
-- [ ] Provide an offline fallback demo path (pre-computed campaign result) in case the venue network fails.
+- [ ] Provide an offline fallback demo path (pre-computed campaign result) in case the venue network fails. _(partial: `docs/demo/campaign_result.json` exists, but no app/UI path serves it offline.)_
 
 **Code snippet — serve the built SPA from FastAPI:**
 
@@ -529,11 +529,11 @@ app.mount("/", StaticFiles(directory="incident-dashboard/dist", html=True), name
 
 **Todo checklist:**
 
-- [ ] Add Vitest + RTL + jsdom; `npm test` script.
+- [ ] Add Vitest + RTL + jsdom; `npm test` script. _(partial: Vitest + `npm test` exist; RTL and jsdom are not installed/configured.)_
 - [ ] `UploadForm`: rejects a bad extension and an oversize file client-side; shows the error banner; calls the API on a valid file (fetch mocked).
 - [ ] `IncidentView`: renders a card per conclusion, badges technique/tactic, expands evidence, shows the parent link for chained conclusions, and renders the zero-conclusion empty state.
 - [ ] `AttackChain`: builds the expected node/edge count from a fixture incident; renders the empty state.
-- [ ] Use the shared contract fixture from Step 1.
+- [ ] Use the shared contract fixture from Step 1. _(partial: only the Step 1 `contract.test.ts` consumes it; no Step 13 component test uses it yet.)_
 - [ ] Wire `npm test` into CI (Step 10).
 
 **Code snippet:**
