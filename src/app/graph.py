@@ -8,15 +8,32 @@ Gotchas: followed_by links all in-window pairs (inclusive boundary);
 same_object is symmetric; multi-kind pairs get a list ``kind`` because
 DiGraph can't hold parallel edges — read via ``edge_kinds()``.
 
-KNOWN-ISSUES Phase 2 #3 (edge explosion) fix: both ``followed_by`` (all
-in-window pairs) and ``same_object`` (cliques within a target group) are
-combinatorial in the group/window size. Measured on real data: 1,052
-events -> 1,105,652 edges; 10,377 events -> build_graph did not return
-within 60s. Neither edge type actually needs to be a complete graph for
-the reasoning engine to work — ``analyze()`` only ever looks at a node's
-*local* neighborhood (see engine.py), so capping fan-out per node loses
-no detections the engine would otherwise use, while bounding worst-case
-edge count to O(nodes * MAX_EDGES_PER_NODE_PER_KIND) instead of O(nodes^2).
+Phase 3 Step 3 — relevance-ordered capping (replaces the single
+``MAX_EDGES_PER_NODE_PER_KIND`` cap from Phase 2's KNOWN-ISSUES #3 fix):
+
+  * ``spawned`` edges are parent/child facts from the log and are ALWAYS
+    added in full — they are sparse, high-signal, and dropping one would
+    drop the relationship the rules exist to find.
+  * ``same_object`` edges link events that share a concrete object (file,
+    registry key, IP). They are high-signal, so the budget is generous
+    (``DEFAULT_MAX_SAME_OBJECT_PER_NODE``): small/real groups are kept as a
+    complete clique, and only a pathologically common target (e.g. the
+    synthetic generator reuses seven process-image names for thousands of
+    rows) is bounded. Within a bounded group the nearest-in-time edges are
+    kept, because every current rule pairs events within the time window.
+  * ``followed_by`` edges are the dense, low-signal kind (all in-window
+    pairs) and are capped tightly by proximity. Input is timestamp-sorted,
+    so the FIRST K successors of an event are its nearest successors;
+    capping there keeps the temporally adjacent pairs the rules actually
+    pair on and drops only far-away noise inside the window.
+
+The budgets were chosen against the 10,000-event synthetic workload (seed
+7) and the seven golden datasets. ``followed_by`` is set to the smallest
+value that keeps every golden conclusion identical: the injected chain's
+process execution and its network connection are 40s apart with ~13 noise
+events between, so the nearest-successor edge only survives at K >= 15.
+``same_object`` is left at its previous generous value — golden object
+groups never reach it, so they stay complete cliques.
 """
 
 from __future__ import annotations
@@ -33,12 +50,25 @@ log = logging.getLogger("incident.graph")
 
 TIME_WINDOW = timedelta(minutes=TIME_WINDOW_MINUTES)
 
-# Hard cap on how many followed_by / same_object edges a single event can
-# accumulate. Chosen generously above what any of the Phase 1/2 rules need
-# (they only ever look one or two hops out), while keeping worst-case graph
-# size linear in event count instead of quadratic. Override via
-# build_graph(..., max_edges_per_node=...) for datasets known to need more.
-DEFAULT_MAX_EDGES_PER_NODE_PER_KIND = 50
+# Cap on followed_by edges FROM one event: keep the K nearest successors.
+# 15 is the smallest value that still connects the injected chain's process
+# execution to its network connection (40s apart, ~13 noise events between)
+# on the 10k synthetic workload; it also keeps every golden dataset's
+# conclusions identical while cutting the 10k graph from ~620k to ~274k
+# edges and graph+reasoning from ~12s to ~3.2s.
+DEFAULT_MAX_FOLLOWED_BY_PER_NODE = 15
+
+# Cap on same_object edges per event: left at the Phase 2 value, so the
+# high-signal kind is as generous as it ever was. Golden datasets' object
+# groups are far below this and stay complete cliques; only a target reused
+# by hundreds of events (e.g. the synthetic generator's seven shared
+# process-image names) is ordered by proximity and bounded.
+DEFAULT_MAX_SAME_OBJECT_PER_NODE = 50
+
+# Backward-compatible alias for the single Phase 2 cap. Kept so any caller
+# (and the module's public surface) that imported the old name still works;
+# it now bounds same_object, the high-signal kind, matching its spirit.
+DEFAULT_MAX_EDGES_PER_NODE_PER_KIND = DEFAULT_MAX_SAME_OBJECT_PER_NODE
 
 
 def _normalize_pid(value: Any) -> str:
@@ -87,40 +117,39 @@ def _count_kinds(graph: nx.DiGraph) -> dict[str, int]:
     return counts
 
 
-def build_graph(
-    events: list[Event],
-    max_edges_per_node: int = DEFAULT_MAX_EDGES_PER_NODE_PER_KIND,
-) -> nx.DiGraph:
-    """Build the event graph; sorts first so any input order yields the same graph.
+def _add_followed_by_edges(
+    graph: nx.DiGraph, ordered: list[Event], max_followed_by: int
+) -> None:
+    """Add temporal edges between events within the window, keeping only the
+    nearest ``max_followed_by`` successors of each event.
 
-    ``max_edges_per_node`` bounds fan-out for ``followed_by`` and
-    ``same_object`` edges (KNOWN-ISSUES #3): once a node has accumulated
-    this many edges of a given kind, no further edges of that kind are
-    added FROM that node. This keeps worst-case edge count linear in the
-    number of events instead of quadratic, without changing the graph at
-    all for datasets small enough to never hit the cap (e.g. the Phase 1
-    attack_sample.csv / benign_sample.csv fixtures).
+    ``ordered`` is timestamp-sorted, so ``ordered[i+1]`` onward is increasing
+    in time: the first K successors are the closest ones. Iterating by index
+    (rather than slicing ``ordered[i+1:]``) avoids copying the tail list on
+    every outer iteration, which was O(n^2) allocation.
     """
-    graph = nx.DiGraph()
-    ordered = sorted(events, key=lambda e: e.timestamp)
-
-    for event in ordered:
-        graph.add_node(event.event_id, event=event)
-
-    # Sorted input: once the gap exceeds the window, nothing later matches — break is safe.
-    # Fan-out cap: stop adding followed_by edges FROM `a` once it has
-    # max_edges_per_node of them, but keep scanning (via `continue`, not
-    # `break` on the cap) since the time-window break must still apply.
+    n = len(ordered)
     followed_by_count: dict[str, int] = {}
-    for i, a in enumerate(ordered):
-        for b in ordered[i + 1 :]:
+    for i in range(n):
+        a = ordered[i]
+        if followed_by_count.get(a.event_id, 0) >= max_followed_by:
+            # Already saturated; the inner loop would break without adding.
+            continue
+        for j in range(i + 1, n):
+            b = ordered[j]
             if b.timestamp - a.timestamp > TIME_WINDOW:
                 break
-            if followed_by_count.get(a.event_id, 0) >= max_edges_per_node:
-                break  # `a` is saturated; later b's are even further away, still saturated
+            if followed_by_count.get(a.event_id, 0) >= max_followed_by:
+                break  # `a` is saturated; later b's are even further away
             _add_edge(graph, a.event_id, b.event_id, EdgeType.FOLLOWED_BY.value)
             followed_by_count[a.event_id] = followed_by_count.get(a.event_id, 0) + 1
 
+
+def _add_spawned_edges(graph: nx.DiGraph, ordered: list[Event]) -> None:
+    """Add parent -> child edges from pid/parentpid metadata.
+
+    Sparse and definitional, so these are never capped.
+    """
     by_pid: dict[str, Event] = {}
     for event in ordered:
         pid = event.metadata.get("pid")
@@ -135,26 +164,65 @@ def build_graph(
                     graph, parent.event_id, event.event_id, EdgeType.SPAWNED.value
                 )
 
-    # same_object is symmetric — add both directions, capped per node so a
-    # single very common target (e.g. a shared temp path) can't create a
-    # clique across thousands of events.
+
+def _add_same_object_edges(
+    graph: nx.DiGraph, ordered: list[Event], max_same_object: int
+) -> None:
+    """Add symmetric edges between events sharing a target, nearest-in-time
+    first within each target group.
+
+    Groups up to ``max_same_object + 1`` events become complete cliques
+    (unchanged from the uncapped graph). Larger groups are relevance-ordered:
+    each event links to its next ``max_same_object`` successors in the group,
+    which for a target group built from timestamp-sorted events are the
+    temporally closest sharers — the ones any window-bounded rule can use.
+    """
     by_target: dict[str, list[Event]] = {}
     for event in ordered:
         by_target.setdefault(event.target, []).append(event)
 
     same_object_count: dict[str, int] = {}
     for group in by_target.values():
-        for i, a in enumerate(group):
-            for b in group[i + 1 :]:
-                if (
-                    same_object_count.get(a.event_id, 0) >= max_edges_per_node
-                    or same_object_count.get(b.event_id, 0) >= max_edges_per_node
-                ):
-                    continue  # skip this pair, but keep checking others in the group
+        size = len(group)
+        for i in range(size):
+            a = group[i]
+            if same_object_count.get(a.event_id, 0) >= max_same_object:
+                continue
+            for j in range(i + 1, size):
+                if same_object_count.get(a.event_id, 0) >= max_same_object:
+                    break
+                b = group[j]
+                if same_object_count.get(b.event_id, 0) >= max_same_object:
+                    continue
                 _add_edge(graph, a.event_id, b.event_id, EdgeType.SAME_OBJECT.value)
                 _add_edge(graph, b.event_id, a.event_id, EdgeType.SAME_OBJECT.value)
                 same_object_count[a.event_id] = same_object_count.get(a.event_id, 0) + 1
                 same_object_count[b.event_id] = same_object_count.get(b.event_id, 0) + 1
+
+
+def build_graph(
+    events: list[Event],
+    max_edges_per_node: int = DEFAULT_MAX_SAME_OBJECT_PER_NODE,
+    *,
+    max_followed_by: int = DEFAULT_MAX_FOLLOWED_BY_PER_NODE,
+) -> nx.DiGraph:
+    """Build the event graph; sorts first so any input order yields the same graph.
+
+    ``max_edges_per_node`` bounds ``same_object`` fan-out per event (kept
+    under the legacy name for callers that passed the single Phase 2 cap).
+    ``max_followed_by`` bounds the dense temporal edges by proximity. Small
+    datasets never reach either budget, so their graph is byte-for-byte the
+    same as the uncapped one.
+    """
+    graph = nx.DiGraph()
+    ordered = sorted(events, key=lambda e: e.timestamp)
+
+    for event in ordered:
+        graph.add_node(event.event_id, event=event)
+
+    _add_followed_by_edges(graph, ordered, max_followed_by)
+    _add_spawned_edges(graph, ordered)
+    _add_same_object_edges(graph, ordered, max_edges_per_node)
 
     log.info(
         "Built graph: %d nodes, %d edges (%s)",

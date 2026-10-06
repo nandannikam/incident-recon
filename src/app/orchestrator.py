@@ -11,6 +11,11 @@ picks the correct parser by extension/content, so real Mordor datasets work.
 the underlying ParseResult for callers that need parse diagnostics.
 `run_analysis` is a thin wrapper kept for backward compatibility.
 
+Phase 3 Step 3 splits the two halves: `analyze_parsed(result)` runs only
+graph + engine on an existing ParseResult. `/analyze` parses once, decides
+synchronously vs background from the event count, and then either calls
+`analyze_parsed` (sync) or schedules it (background) without re-parsing.
+
 Phase 3 Step 4: conclusions are ordered by kill-chain tactic, cross-host
 links are found through shared objects, and `summary` is the narrative.
 """
@@ -31,19 +36,30 @@ from app.rules.registry import RULES
 from app.visualize import visualize
 
 
-def run_analysis_with_diagnostics(file_path: str) -> tuple[Incident, ParseResult]:
-    """Parse `file_path` (CSV or Mordor NDJSON/JSON, auto-detected), build the
-    event graph, reason, correlate, and return the Incident and ParseResult."""
-    result = parse_any_log(file_path)
+def analyze_parsed(result: ParseResult) -> Incident:
+    """Run graph building + reasoning on an already-parsed ParseResult.
+
+    Split out so a caller that has to inspect the parse result first (e.g.
+    ``POST /analyze`` deciding whether to run synchronously or in the
+    background) can parse once and then reuse that work, instead of parsing
+    the file twice.
+    """
     graph = build_graph(result.events)
     conclusions = order_by_kill_chain(analyze(graph, RULES))
     links = find_cross_host_links(graph, conclusions)
-    incident = Incident(
+    return Incident(
         id=str(uuid.uuid4()),
         summary=build_summary(len(result.events), result.skipped, conclusions, links),
         conclusions=conclusions,
     )
-    return incident, result
+
+
+def run_analysis_with_diagnostics(file_path: str) -> tuple[Incident, ParseResult]:
+    """Parse `file_path` (CSV or Mordor NDJSON/JSON, auto-detected),
+    build the event graph, run the reasoning engine, and return both the
+    resulting Incident and the raw ParseResult (for diagnostics)."""
+    result = parse_any_log(file_path)
+    return analyze_parsed(result), result
 
 
 def run_analysis(file_path: str) -> Incident:

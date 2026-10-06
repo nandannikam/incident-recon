@@ -7,6 +7,27 @@ the loop converges. Matching is per-node neighborhood, NOT rules ×
 all-events (roadmap risk table "Matching cost"), with neighborhoods
 time-window filtered to curb the near-clique edge explosion
 (KNOWN-ISSUES #5).
+
+Phase 3 Step 3 — performance pass. Two things made this O(iterations ×
+nodes × neighborhood) expensive on large graphs:
+
+  * ``_neighborhood`` walked NetworkX ``all_neighbors`` (a report view
+    with per-access overhead) and was rebuilt for every node on every
+    forward-chaining iteration, even though the graph never changes.
+  * Neighbors were visited through ``graph.nodes[...]`` report views too.
+
+Now ``_GraphIndex`` is built ONCE per ``analyze()`` call: a plain
+``node -> Event`` map, a plain adjacency map (``node -> [neighbor ids]``,
+successors then predecessors to match ``all_neighbors``), the
+``(event_type, source)`` and ``target`` candidate lookups requested by the
+roadmap, and the fully materialized ``node -> [Event]`` neighborhoods.
+The loop then reuses those lists, so no NetworkX neighbor traversal
+happens per iteration.
+
+The RuleFunc contract is unchanged: rules still receive a plain
+``list[Event]`` neighborhood (with the center first) plus the graph and the
+accumulated facts. Neighborhoods are a superset of each rule's own
+event-type filtering, so detection is unaffected.
 """
 
 from __future__ import annotations
@@ -16,31 +37,91 @@ from datetime import timedelta
 
 import networkx as nx
 
-from app.models import TIME_WINDOW_MINUTES, Conclusion
+from app.models import TIME_WINDOW_MINUTES, Conclusion, Event
 from app.rules.registry import RULES, RuleFunc
 
 log = logging.getLogger("incident.engine")
 
 MAX_ITERATIONS = 10
 TIME_WINDOW = timedelta(minutes=TIME_WINDOW_MINUTES)
+_WINDOW_SECONDS = TIME_WINDOW.total_seconds()
 
 
-def _neighborhood(graph: nx.DiGraph, node_id: str) -> list:
-    """The node's event plus in-window one-hop neighbors (rules filter further)."""
-    center = graph.nodes[node_id]["event"]
-    events = [center]
-    for nbr in nx.all_neighbors(graph, node_id):
-        if nbr == node_id:
-            continue
-        event = graph.nodes[nbr].get("event")
-        if event is None:
-            continue
-        if (
-            abs((event.timestamp - center.timestamp).total_seconds())
-            <= TIME_WINDOW.total_seconds()
-        ):
-            events.append(event)
-    return events
+class _GraphIndex:
+    """Per-graph lookup tables, built once per ``analyze()`` call.
+
+    The plain dictionaries replace NetworkX report views on the hot path;
+    ``neighborhoods`` is materialized once and reused across forward-chaining
+    iterations. ``by_type_source`` / ``by_target`` are the candidate lookups
+    the Step 3 roadmap asks for, available to callers that want to inspect a
+    node's candidates without re-walking the graph.
+    """
+
+    __slots__ = (
+        "adjacency",
+        "by_target",
+        "by_type_source",
+        "neighborhoods",
+        "node_events",
+    )
+
+    def __init__(self, graph: nx.DiGraph) -> None:
+        node_events: dict[str, Event] = {}
+        for node_id in graph.nodes:
+            event = graph.nodes[node_id].get("event")
+            if event is not None:
+                node_events[node_id] = event
+        self.node_events = node_events
+
+        # all_neighbors on a DiGraph yields successors then predecessors.
+        # Append in that order; a pair carrying both directions (e.g. a
+        # bidirectional same_object edge) appears twice, then we drop the
+        # repeat while keeping the first occurrence so rule selection order
+        # is unchanged from the NetworkX version.
+        adjacency: dict[str, list[str]] = {node_id: [] for node_id in graph.nodes}
+        for u, v in graph.edges:
+            adjacency[u].append(v)
+            adjacency[v].append(u)
+        for node_id, neighbors in adjacency.items():
+            if len(neighbors) > 1:
+                seen: set[str] = set()
+                adjacency[node_id] = [
+                    nb for nb in neighbors if not (nb in seen or seen.add(nb))
+                ]
+        self.adjacency = adjacency
+
+        by_type_source: dict[tuple, list[Event]] = {}
+        by_target: dict[str, list[Event]] = {}
+        for event in node_events.values():
+            by_type_source.setdefault((event.event_type, event.source), []).append(
+                event
+            )
+            by_target.setdefault(event.target, []).append(event)
+        self.by_type_source = by_type_source
+        self.by_target = by_target
+
+        self.neighborhoods: dict[str, list[Event]] = {
+            node_id: self._neighborhood(node_id) for node_id in graph.nodes
+        }
+
+    def _neighborhood(self, node_id: str) -> list[Event]:
+        """The node's event plus in-window one-hop neighbors (rules filter further)."""
+        center = self.node_events.get(node_id)
+        if center is None:
+            return []
+        events = [center]
+        center_timestamp = center.timestamp
+        append = events.append
+        for neighbor_id in self.adjacency.get(node_id, ()):
+            event = self.node_events.get(neighbor_id)
+            if event is None:
+                continue
+            if (
+                abs((event.timestamp - center_timestamp).total_seconds())
+                <= _WINDOW_SECONDS
+            ):
+                append(event)
+        return events
 
 
 def hash_conclusion(conclusion: Conclusion) -> str:
@@ -132,6 +213,13 @@ def analyze(
     if rules is None:
         rules = list(RULES)
 
+    index = _GraphIndex(graph)
+    log.info(
+        "Indexed %d nodes (%d candidate events).",
+        len(index.node_events),
+        len(index.by_type_source),
+    )
+
     conclusions: list[Conclusion] = []
     seen_hashes: set[str] = set()
 
@@ -139,7 +227,9 @@ def analyze(
         new_conclusions: list[Conclusion] = []
 
         for node_id in graph.nodes:
-            neighborhood = _neighborhood(graph, node_id)
+            neighborhood = index.neighborhoods[node_id]
+            if not neighborhood:
+                continue
             for rule in rules:
                 result = rule(neighborhood, graph, conclusions)
                 if result is None:

@@ -22,6 +22,7 @@ _SETTING_VARS = (
     "CORS_ORIGINS",
     "MAX_UPLOAD_BYTES",
     "TIME_WINDOW_MINUTES",
+    "BACKGROUND_ANALYSIS_THRESHOLD",
     "DATABASE_URL",
     "API_KEY",
     "LOG_LEVEL",
@@ -58,6 +59,7 @@ def test_defaults_match_the_previously_hardcoded_values(
     assert s.environment == "development"
     assert s.max_upload_bytes == 50 * 1024 * 1024
     assert s.time_window_minutes == 5
+    assert s.background_analysis_threshold == 5000
     assert s.database_url == "sqlite:///./incidents.db"
     assert s.log_level == "INFO"
     assert s.api_key is None
@@ -69,12 +71,14 @@ def test_environment_variable_overrides_a_setting(
 ) -> None:
     clean_env.setenv("MAX_UPLOAD_BYTES", "10")
     clean_env.setenv("TIME_WINDOW_MINUTES", "9")
+    clean_env.setenv("BACKGROUND_ANALYSIS_THRESHOLD", "123")
     clean_env.setenv("LOG_LEVEL", "debug")
 
     s = _fresh()
 
     assert s.max_upload_bytes == 10
     assert s.time_window_minutes == 9
+    assert s.background_analysis_threshold == 123
     assert s.log_level == "DEBUG"  # normalised to upper case
 
 
@@ -118,7 +122,12 @@ def test_unknown_log_level_is_rejected(bad_level: str) -> None:
 
 @pytest.mark.parametrize(
     "field, value",
-    [("max_upload_bytes", 0), ("max_upload_bytes", -1), ("time_window_minutes", 0)],
+    [
+        ("max_upload_bytes", 0),
+        ("max_upload_bytes", -1),
+        ("time_window_minutes", 0),
+        ("background_analysis_threshold", 0),
+    ],
 )
 def test_non_positive_limits_are_rejected(field: str, value: int) -> None:
     with pytest.raises(ValidationError):
@@ -167,9 +176,7 @@ def test_upload_endpoint_also_enforces_the_limit(
 ) -> None:
     monkeypatch.setattr(settings, "max_upload_bytes", 1)
 
-    res = client.post(
-        "/upload", files={"file": ("a.csv", SMALL_CSV, "text/csv")}
-    )
+    res = client.post("/upload", files={"file": ("a.csv", SMALL_CSV, "text/csv")})
 
     assert res.status_code == 413
 
@@ -183,7 +190,11 @@ def test_time_window_env_var_reaches_the_models_module(tmp_path: Path) -> None:
     env["ENVIRONMENT"] = "development"
 
     out = subprocess.run(
-        [sys.executable, "-c", "from app.models import TIME_WINDOW_MINUTES as t; print(t)"],
+        [
+            sys.executable,
+            "-c",
+            "from app.models import TIME_WINDOW_MINUTES as t; print(t)",
+        ],
         capture_output=True,
         text=True,
         env=env,

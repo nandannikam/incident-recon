@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     upload_dir: str | None = None
     time_window_minutes: int = Field(default=5, ge=1)
 
+    # Above this many parsed events, POST /analyze runs graph + reasoning as
+    # a FastAPI BackgroundTask and returns 202 with a job id instead of
+    # blocking the request (see main.py). Kept configurable so tests can force
+    # the background path with a small upload.
+    background_analysis_threshold: int = Field(default=5000, ge=1)
+
     database_url: str = "sqlite:///./incidents.db"
     api_key: str | None = None
 
@@ -99,7 +105,9 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         """CORS origins with whitespace and trailing slashes removed (a
         trailing slash makes the browser's Origin comparison fail)."""
-        return [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+        return [
+            o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()
+        ]
 
 
 settings = Settings()

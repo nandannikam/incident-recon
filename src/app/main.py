@@ -26,23 +26,35 @@ KNOWN-ISSUES Phase 2 fixes applied here:
       content for every non-.csv file; that raises UnknownLogFormatError,
       which /analyze and /upload now catch here and turn into a clear
       422 response instead of an unhandled 500.
+
+Phase 3 Step 3: /analyze parses the upload once, then decides between the
+existing synchronous AnalyzeResponse and a background job. Above
+``settings.background_analysis_threshold`` parsed events it schedules graph
++ reasoning on FastAPI BackgroundTasks and returns 202 {job_id, status};
+GET /jobs/{job_id} reports pending/completed/failed and, once completed, the
+incident plus parse diagnostics.
 """
 
 from __future__ import annotations
 
+import logging
 import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.config import settings
-from app.dispatch import UnknownLogFormatError
+from app.dispatch import UnknownLogFormatError, parse_any_log
 from app.models import Incident
-from app.orchestrator import run_analysis_with_diagnostics
+from app.orchestrator import analyze_parsed
+from app.parser import ParseResult
 from app.storage import get_incident, save_incident
+
+log = logging.getLogger("incident.api")
 
 app = FastAPI(title="Cybersecurity Incident Reconstruction API")
 
@@ -81,6 +93,56 @@ class AnalyzeResponse(BaseModel):
 
     incident: Incident
     diagnostics: ParseDiagnostics
+
+
+class JobStatusResponse(BaseModel):
+    """Status of a background /analyze job. ``incident``/``diagnostics`` are
+    populated once the job completes; they stay None while pending/failed."""
+
+    job_id: str
+    status: str
+    incident: Incident | None = None
+    diagnostics: ParseDiagnostics | None = None
+
+
+# In-memory job store for background analyses. Deliberately small and
+# process-local: this is a request-level guard so a huge upload doesn't
+# block the API worker, not a durable queue (Step 8 can replace it).
+_JOBS: dict[str, dict] = {}
+
+
+def _run_background_job(
+    job_id: str, result: ParseResult, diagnostics: ParseDiagnostics
+) -> None:
+    """Run graph + engine for a background upload, then persist the incident.
+
+    Any failure is recorded as ``failed`` rather than propagating, so one bad
+    upload cannot take down the worker running the rest of the queue.
+    """
+    try:
+        incident = analyze_parsed(result)
+        save_incident(incident)
+    except Exception:  # background task: record, don't crash the worker
+        log.exception("Background analysis job %s failed", job_id)
+        _JOBS[job_id] = {
+            "status": "failed",
+            "incident": None,
+            "diagnostics": diagnostics,
+        }
+        return
+    _JOBS[job_id] = {
+        "status": "completed",
+        "incident": incident,
+        "diagnostics": diagnostics,
+    }
+
+
+def _diagnostics(result: ParseResult) -> ParseDiagnostics:
+    return ParseDiagnostics(
+        total_rows=result.total_rows,
+        skipped=result.skipped,
+        errors=result.errors[:MAX_DIAGNOSTIC_ERRORS],
+    )
 
 
 def _human_size(num_bytes: int) -> str:
@@ -149,8 +211,16 @@ async def upload_endpoint(file: UploadFile = File(...)):
     return {"file_id": file_id, "path": path}
 
 
-@app.post("/analyze", response_model=AnalyzeResponse)
-async def analyze_endpoint(file: UploadFile = File(...)):
+@app.post("/analyze")
+async def analyze_endpoint(
+    background_tasks: BackgroundTasks, file: UploadFile = File(...)
+):
+    """Parse once, then either analyze synchronously (small files) or hand
+    graph + reasoning to a background task and return 202 (large files).
+
+    The parse must happen here regardless of path, so a mislabeled file still
+    gets its clear 422 before any job is scheduled.
+    """
     filename = _require_filename(file.filename)
     _validate_extension(filename)
 
@@ -160,19 +230,40 @@ async def analyze_endpoint(file: UploadFile = File(...)):
     path = _save_upload(filename, contents)
 
     try:
-        incident, result = run_analysis_with_diagnostics(path)
+        result = parse_any_log(path)
     except UnknownLogFormatError as exc:
         raise HTTPException(422, f"Could not determine file format: {exc}") from exc
 
+    diagnostics = _diagnostics(result)
+
+    if len(result.events) > settings.background_analysis_threshold:
+        job_id = uuid.uuid4().hex
+        _JOBS[job_id] = {
+            "status": "pending",
+            "incident": None,
+            "diagnostics": diagnostics,
+        }
+        background_tasks.add_task(_run_background_job, job_id, result, diagnostics)
+        return JSONResponse(
+            status_code=202, content={"job_id": job_id, "status": "pending"}
+        )
+
+    incident = analyze_parsed(result)
     save_incident(incident)
 
-    return AnalyzeResponse(
-        incident=incident,
-        diagnostics=ParseDiagnostics(
-            total_rows=result.total_rows,
-            skipped=result.skipped,
-            errors=result.errors[:MAX_DIAGNOSTIC_ERRORS],
-        ),
+    return AnalyzeResponse(incident=incident, diagnostics=diagnostics)
+
+
+@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+def get_job_status(job_id: str):
+    job = _JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    return JobStatusResponse(
+        job_id=job_id,
+        status=job["status"],
+        incident=job.get("incident"),
+        diagnostics=job.get("diagnostics"),
     )
 
 

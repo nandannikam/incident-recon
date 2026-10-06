@@ -30,10 +30,13 @@ CHAIN_TARGETS = {
     "invoice.exe",
 }
 
-# Generous ceilings: smoke tests against runaway cost, not benchmarks. Measured
-# on a laptop: parse ~1 s, graph ~2 s, reasoning ~7 s for 10,000 events.
+# Params: a smoke ceiling for parse; a real budget for graph + reasoning.
+# Phase 3 Step 3 made 10k events run in ~3.2s (was ~12.4s), so 5.0s is the
+# target with headroom. MAX_EDGES_PER_NODE_BOUND is a regression guard: the
+# relevance-ordered caps keep the 10k graph at ~27 edges/node (~274k edges).
 PARSE_BUDGET_SECONDS = 30.0
-PIPELINE_BUDGET_SECONDS = 120.0
+GRAPH_ENGINE_BUDGET_SECONDS = 5.0
+MAX_EDGES_PER_NODE_BOUND = 35
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +85,9 @@ def test_written_csv_parses_with_no_skipped_rows(tmp_path: Path) -> None:
 
 
 def test_write_creates_missing_parent_directories(tmp_path: Path) -> None:
-    path = write_synthetic_csv(tmp_path / "deep" / "er" / "log.csv", 50, attack_chains=1)
+    path = write_synthetic_csv(
+        tmp_path / "deep" / "er" / "log.csv", 50, attack_chains=1
+    )
 
     assert path.is_file()
 
@@ -150,9 +155,7 @@ def test_injected_chains_are_detected_and_only_chains(tmp_path: Path) -> None:
     )
     events = parse_log(str(path)).events
     by_id = {e.event_id: e for e in events}
-    chain_hosts = {
-        e.source for e in events if e.event_type.value == "log_deletion"
-    }
+    chain_hosts = {e.source for e in events if e.event_type.value == "log_deletion"}
 
     incident = run_analysis(str(path))
 
@@ -184,15 +187,43 @@ def test_ten_thousand_events_complete_within_the_time_budget(tmp_path: Path) -> 
     assert parse_seconds < PARSE_BUDGET_SECONDS
 
     start = time.monotonic()
-    conclusions = analyze(build_graph(result.events), RULES)
+    graph = build_graph(result.events)
+    conclusions = analyze(graph, RULES)
     pipeline_seconds = time.monotonic() - start
 
-    assert pipeline_seconds < PIPELINE_BUDGET_SECONDS, (
-        f"graph + reasoning took {pipeline_seconds:.1f}s on 10,000 events "
-        f"(budget {PIPELINE_BUDGET_SECONDS}s)"
+    assert (
+        graph.number_of_edges() <= graph.number_of_nodes() * MAX_EDGES_PER_NODE_BOUND
+    ), (
+        f"graph exploded to {graph.number_of_edges()} edges on "
+        f"{graph.number_of_nodes()} nodes (bound "
+        f"{MAX_EDGES_PER_NODE_BOUND}/node)"
     )
-    assert conclusions, "the injected attack chains should be detected at scale"
-    print(f"10k events: parse {parse_seconds:.2f}s, graph+reasoning {pipeline_seconds:.2f}s")
+    assert pipeline_seconds < GRAPH_ENGINE_BUDGET_SECONDS, (
+        f"graph + reasoning took {pipeline_seconds:.1f}s on 10,000 events "
+        f"(budget {GRAPH_ENGINE_BUDGET_SECONDS}s)"
+    )
+
+    # Each of the three injected chains lives on its own host; every rule
+    # must still fire on every chain, so capping cannot silently drop one.
+    by_rule: dict[str, set[str]] = {}
+    for conclusion in conclusions:
+        by_rule.setdefault(conclusion.rule_id, set()).update(conclusion.hosts)
+    assert set(by_rule) == {
+        "REG-PERSIST-01",
+        "PSH-STAGING-01",
+        "PERSIST-ESTABLISHED-01",
+        "C2-BEACON-01",
+        "LOG-CLEAR-01",
+    }
+    for rule_id, hosts in by_rule.items():
+        assert hosts == {"HOST01", "HOST02", "HOST03"}, (
+            f"{rule_id} lost a chain host: {sorted(hosts)}"
+        )
+
+    print(
+        f"10k events: parse {parse_seconds:.2f}s, graph+reasoning "
+        f"{pipeline_seconds:.2f}s, edges {graph.number_of_edges()}"
+    )
 
 
 def test_pandas_round_trip_preserves_the_frame(tmp_path: Path) -> None:
