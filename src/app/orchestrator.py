@@ -2,21 +2,17 @@
 Pipeline Orchestrator.
 
 `run_analysis` is the single callable that chains parsing -> graph ->
-reasoning -> Incident, runnable from the CLI without HTTP.
+reasoning -> correlation -> Incident, runnable from the CLI without HTTP.
 
-Fixes KNOWN-ISSUES Phase 2 #1: previously hardcoded `parse_log` (CSV-only),
-so any real Mordor dataset (`.json`/`.ndjson`) crashed with a pandas
-`ParserError` here (and propagated as a 500 from `POST /analyze`). Now
-routes through `dispatch.parse_any_log`, which picks the correct parser by
-extension/content and normalizes pid metadata so graph building behaves
-the same regardless of source format.
+Fixes KNOWN-ISSUES Phase 2 #1: routes through `dispatch.parse_any_log`, which
+picks the correct parser by extension/content, so real Mordor datasets work.
 
-`run_analysis_with_diagnostics` (added for #5) returns the same Incident
-plus the underlying ParseResult, so callers that need parse diagnostics
-(currently: the /analyze endpoint in main.py) don't have to duplicate the
-parse -> graph -> engine pipeline themselves. `run_analysis` is kept as a
-thin wrapper so its existing signature/behavior (and anything already
-depending on it, e.g. the CLI and prior tests) is unaffected.
+`run_analysis_with_diagnostics` (KNOWN-ISSUES #5) returns the Incident plus
+the underlying ParseResult for callers that need parse diagnostics.
+`run_analysis` is a thin wrapper kept for backward compatibility.
+
+Phase 3 Step 4: conclusions are ordered by kill-chain tactic, cross-host
+links are found through shared objects, and `summary` is the narrative.
 """
 
 from __future__ import annotations
@@ -25,6 +21,7 @@ import json
 import sys
 import uuid
 
+from app.correlation import build_summary, find_cross_host_links, order_by_kill_chain
 from app.dispatch import parse_any_log
 from app.engine import analyze
 from app.graph import build_graph
@@ -35,28 +32,22 @@ from app.visualize import visualize
 
 
 def run_analysis_with_diagnostics(file_path: str) -> tuple[Incident, ParseResult]:
-    """Parse `file_path` (CSV or Mordor NDJSON/JSON, auto-detected),
-    build the event graph, run the reasoning engine, and return both the
-    resulting Incident and the raw ParseResult (for diagnostics)."""
+    """Parse `file_path` (CSV or Mordor NDJSON/JSON, auto-detected), build the
+    event graph, reason, correlate, and return the Incident and ParseResult."""
     result = parse_any_log(file_path)
     graph = build_graph(result.events)
-    conclusions = analyze(graph, RULES)
+    conclusions = order_by_kill_chain(analyze(graph, RULES))
+    links = find_cross_host_links(graph, conclusions)
     incident = Incident(
         id=str(uuid.uuid4()),
-        summary=(
-            f"Analyzed {len(result.events)} events "
-            f"(skipped {result.skipped} malformed rows), "
-            f"found {len(conclusions)} conclusions."
-        ),
+        summary=build_summary(len(result.events), result.skipped, conclusions, links),
         conclusions=conclusions,
     )
     return incident, result
 
 
 def run_analysis(file_path: str) -> Incident:
-    """Backward-compatible entry point: same as
-    run_analysis_with_diagnostics but returns only the Incident, for
-    callers (CLI, existing tests) that don't need parse diagnostics."""
+    """Backward-compatible entry point returning only the Incident."""
     incident, _result = run_analysis_with_diagnostics(file_path)
     return incident
 
