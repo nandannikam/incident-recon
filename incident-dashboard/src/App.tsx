@@ -206,7 +206,7 @@ function ResultView({
           <span className="status-chip">Reconstructed</span>
           <span className="incident-id">INCIDENT #{incident.id}</span>
         </div>
-        <p className="result-summary">{incident.summary}</p>
+        <SummaryBlock text={incident.summary} />
         <div className="stats-row">
           <div className="stat">
             <span className="stat-num">{incident.conclusions.length}</span>
@@ -283,5 +283,27 @@ function TabButton({
     >
       {label}
     </button>
+  );
+}
+
+/* Short lead line; the full kill-chain narrative sits in a collapsible block. */
+function SummaryBlock({ text }: { text: string }) {
+  const LIMIT = 240;
+  const [first, ...rest] = text.split("\n");
+  const tooLong = first.length > LIMIT;
+  const cut = first.lastIndexOf(" ", LIMIT);
+  const lead = tooLong ? first.slice(0, cut > 0 ? cut : LIMIT) + "…" : first;
+  const hasMore = tooLong || rest.some((line) => line.trim() !== "");
+
+  return (
+    <div className="summary-block">
+      <p className="summary-lead">{lead}</p>
+      {hasMore && (
+        <details className="summary-details">
+          <summary>Show full narrative</summary>
+          <pre className="summary-body">{text}</pre>
+        </details>
+      )}
+    </div>
   );
 }
