@@ -33,7 +33,11 @@ SMALL_MORDOR_DATASETS = [
 
 @pytest.fixture()
 def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "roundtrip.db"))
+    monkeypatch.setattr(
+    storage.settings,
+    "database_url",
+    f"sqlite:///{tmp_path / 'roundtrip.db'}",
+)
 
 
 def _conclusion(**overrides) -> Conclusion:

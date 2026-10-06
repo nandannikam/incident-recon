@@ -18,6 +18,10 @@ from app.main import app
 
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "test_incidents.db"))
+    monkeypatch.setattr(
+    storage.settings,
+    "database_url",
+    f"sqlite:///{tmp_path / 'test_incidents.db'}",
+)
     with TestClient(app) as test_client:
         yield test_client

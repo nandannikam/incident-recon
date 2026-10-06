@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     max_upload_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
+    upload_dir: str | None = None
     time_window_minutes: int = Field(default=5, ge=1)
 
     database_url: str = "sqlite:///./incidents.db"

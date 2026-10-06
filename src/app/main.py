@@ -127,7 +127,8 @@ def _save_upload(filename: str, contents: bytes) -> str:
     (e.g. C:\\Users\\<user>\\AppData\\Local\\Temp on Windows, /tmp on
     Linux/Mac) so this works the same way regardless of platform.
     """
-    temp_dir = Path(tempfile.gettempdir())
+    temp_dir = Path(settings.upload_dir or tempfile.gettempdir())
+    temp_dir.mkdir(parents=True, exist_ok=True)
     path = temp_dir / f"{uuid.uuid4().hex}_{filename}"
     with open(path, "wb") as f:
         f.write(contents)

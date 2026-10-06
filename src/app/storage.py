@@ -1,12 +1,11 @@
 import sqlite3
 from app.models import Incident
-
-DB_PATH = "incidents.db"
+from app.config import settings
 
 
 def _conn():
-    return sqlite3.connect(DB_PATH)
-
+    db_path = settings.database_url.removeprefix("sqlite:///")
+    return sqlite3.connect(db_path)
 
 def save_incident(incident: Incident) -> None:
     with _conn() as c:
