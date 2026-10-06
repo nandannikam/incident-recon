@@ -12,3 +12,7 @@ dist/
 .opencode/
 *.png
 *.graphml
+
+# Large Mordor datasets (fetched by scripts/fetch_datasets.sh)
+src/data/mordor/apt29_evals_day1_manual_*.json
+src/data/mordor/cmd_wevtutil_modify_security_eventlog_path*.json

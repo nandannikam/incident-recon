@@ -40,7 +40,12 @@ DATASETS: dict[str, Path] = {
 
 @pytest.fixture(scope="module")
 def incidents() -> dict[str, object]:
-    return {name: run_analysis(str(path)) for name, path in DATASETS.items()}
+    # Large datasets are fetched by `make data`; skip any that are absent.
+    return {
+        name: run_analysis(str(path))
+        for name, path in DATASETS.items()
+        if path.exists()
+    }
 
 
 def _rule_counts(incident) -> Counter:
@@ -60,6 +65,8 @@ def test_no_dataset_repeats_a_rule_on_the_same_host(incidents) -> None:
 
 
 def test_wevtutil_private_and_multicast_destinations_do_not_beacon(incidents) -> None:
+    if "wevtutil" not in incidents:
+        pytest.skip("wevtutil dataset not downloaded (run `make data`)")
     # Real flood-control case: this dataset's only network destinations are
     # private (10.0.10.x) or multicast/benign-port, so C2 must be silent.
     incident = incidents["wevtutil"]
