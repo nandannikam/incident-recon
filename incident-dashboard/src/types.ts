@@ -20,10 +20,19 @@ export interface Conclusion {
   tactic: string;
   description: string;
   evidence: Evidence[];
+  /** Rule confidence, 0..1. */
+  confidence?: number | null;
+  severity?: Severity | null;
+  /** Hosts the finding was observed on. */
+  hosts?: string[];
 }
+
+export type Severity = "info" | "low" | "medium" | "high" | "critical";
 
 export interface Incident {
   id: string;
   summary: string;
+  /** Most serious conclusion's severity. */
+  severity?: Severity | null;
   conclusions: Conclusion[];
 }

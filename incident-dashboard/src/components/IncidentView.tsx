@@ -62,10 +62,25 @@ function ConclusionCard({ conclusion, index, resolveParent }: CardProps) {
           <span className="tactic-dot" aria-hidden="true" />
           {conclusion.tactic}
         </span>
+        {conclusion.severity && (
+          <span className={`sev-badge sev-${conclusion.severity}`}>
+            {conclusion.severity}
+          </span>
+        )}
+        {typeof conclusion.confidence === "number" && (
+          <span className="conf-badge" title="Rule confidence">
+            {Math.round(conclusion.confidence * 100)}% conf
+          </span>
+        )}
         <span className="cc-rule">{conclusion.rule_id}</span>
       </header>
 
       <p className="cc-desc">{conclusion.description}</p>
+      {conclusion.hosts && conclusion.hosts.length > 0 && (
+        <p className="cc-hosts">
+          <span className="parent-label">HOST</span> {conclusion.hosts.join(", ")}
+        </p>
+      )}
 
       <footer className="cc-foot">
         <button

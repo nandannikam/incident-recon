@@ -1325,3 +1325,42 @@ code,
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- severity / confidence badges (Phase 3 Step 4) ---------- */
+.sev-badge {
+  --sev: #79628c;
+  font-family: var(--font-code);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--primary);
+  background: var(--sev);
+  border-radius: var(--r-xs);
+  padding: 4px 8px;
+}
+.sev-info { --sev: #79628c; color: var(--on-primary); }
+.sev-low { --sev: #9d8fe0; }
+.sev-medium { --sev: #bdb8c0; }
+.sev-high { --sev: #fa7faa; }
+.sev-critical { --sev: #ff5c7a; }
+
+.conf-badge {
+  font-family: var(--font-code);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--on-primary);
+  background: var(--surface-night);
+  border: 1px solid var(--hairline-violet);
+  border-radius: var(--r-xs);
+  padding: 4px 8px;
+}
+
+.cc-hosts {
+  padding: 8px 20px 0;
+  margin: 0;
+  font-family: var(--font-code);
+  font-size: 11px;
+  color: var(--on-dark-muted);
+}
