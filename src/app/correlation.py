@@ -34,6 +34,18 @@ KILL_CHAIN_ORDER: tuple[str, ...] = (
 _MAX_LINKS_IN_SUMMARY = 5
 _HASH_RE = re.compile(r"\b(SHA256|SHA1|MD5)=([0-9A-Fa-f]{32,64})\b")
 
+# Only real autorun locations link hosts. Service-config keys (Tcpip, W32Time...)
+# are written by Windows itself on every machine and prove nothing.
+_AUTORUN_MARKERS = (
+    "\\currentversion\\run",
+    "\\winlogon",
+)
+
+
+def _is_autorun_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(marker in lowered for marker in _AUTORUN_MARKERS)
+
 
 @dataclass(frozen=True)
 class CrossHostLink:
@@ -59,7 +71,7 @@ def _event_objects(event: Event) -> set[tuple[str, str]]:
             )
             objects.add(("ip", str(raw).strip()))
     elif event.event_type == EventType.REGISTRY_MODIFICATION:
-        if _is_persistence_registry_key(event.target):
+        if _is_persistence_registry_key(event.target) and _is_autorun_key(event.target):
             objects.add(("registry key", event.target.strip().lower()))
     elif event.event_type in (EventType.FILE_DOWNLOAD, EventType.FILE_CREATION):
         target = event.target.strip().lower()

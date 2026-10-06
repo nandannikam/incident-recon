@@ -103,7 +103,12 @@ def _largest_mordor_dataset() -> Path | None:
     the same as the small known-good process-execution sample."""
     if not _MORDOR_DIR.is_dir():
         return None
-    candidates = list(_MORDOR_DIR.glob("*.json"))
+    # Campaign-scale files (apt29_*) are covered by the golden test and
+    # `make demo`; this test guards the ~10k-event edge-explosion case.
+    candidates = [
+        f for f in _MORDOR_DIR.glob("*.json")
+        if not f.name.lower().startswith("apt29")
+    ]
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_size)

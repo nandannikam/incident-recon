@@ -111,3 +111,29 @@ def test_unknown_tactic_sorts_last_and_empty_summary() -> None:
     odd = known.model_copy(update={"conclusion_id": "c9", "tactic": "Mystery"})
     assert order_by_kill_chain([odd, known])[-1].tactic == "Mystery"
     assert "No malicious activity" in build_summary(10, 0, [], [])
+
+
+def _reg_conclusion(n: int, host: str, key: str) -> tuple[Event, Conclusion]:
+    event = _event(n, host, EventType.REGISTRY_MODIFICATION, key, n)
+    conclusion = Conclusion(
+        conclusion_id=f"r{n}",
+        rule_id="REG-PERSIST-01",
+        technique_id="T1547.001",
+        tactic="Persistence",
+        description="persistence",
+        evidence=[Evidence(event_ids=[event.event_id], explanation="x")],
+        hosts=[host],
+    )
+    return event, conclusion
+
+
+def test_registry_link_needs_a_real_autorun_key() -> None:
+    cases = (
+        ("hklm\\system\\currentcontrolset\\services\\tcpip\\parameters", 0),
+        ("hklm\\software\\microsoft\\windows\\currentversion\\run\\evil", 1),
+    )
+    for key, expected in cases:
+        ea, ca = _reg_conclusion(1, "hostA", key)
+        eb, cb = _reg_conclusion(2, "hostB", key)
+        links = find_cross_host_links(_graph([ea, eb], []), [ca, cb])
+        assert len(links) == expected, key
